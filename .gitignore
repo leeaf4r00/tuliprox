@@ -47,6 +47,11 @@ artifacts
 # Ignore VSCode settings and files
 /.vscode
 
+# Local runtime state and downloaded media must never be committed.
+/backup/
+/data/
+/downloads/
+
 .envrc
 backend/app/Cargo.lock
 
