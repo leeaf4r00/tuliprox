@@ -1963,9 +1963,18 @@
       "WEBPLAYER_URL_COPY_TO_CLIPBOARD": "O URL copiado do WebPlayer é válido por 30 segundos."
     },
     "PLAYBACK": {
-      "BROWSER_HINT": "Use os controles do vídeo para iniciar a reprodução. O player aceita HLS e MPEG-TS; avançar em arquivos .ts pode ser limitado.",
+      "BROWSER_HINT": "Use os controles do vídeo para iniciar a reprodução. Volume, resolução, áudio e legendas aparecem quando a fonte oferece essas opções. O player aceita HLS e MPEG-TS; avançar em arquivos .ts pode ser limitado.",
       "ERROR": "O navegador não conseguiu reproduzir este vídeo. O formato pode não ser compatível ou o provedor pode ter bloqueado o stream.",
-      "NO_URL": "Não foi possível obter um link de reprodução para este item."
+      "NO_URL": "Não foi possível obter um link de reprodução para este item.",
+      "CONTROLS": "Controles de reprodução",
+      "VOLUME": "Volume",
+      "MUTE": "Silenciar",
+      "UNMUTE": "Ativar som",
+      "QUALITY": "Resolução",
+      "AUDIO": "Áudio",
+      "SUBTITLES": "Legendas",
+      "AUTO": "Automático",
+      "SUBTITLES_OFF": "Desligadas"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Selecione uma lista de reprodução para visualizar seu conteúdo.",

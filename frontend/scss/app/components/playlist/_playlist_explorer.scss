@@ -444,6 +444,84 @@ $series-backdrop-mobile-height: 150px;
     object-fit: contain;
   }
 
+  &__controls {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: end;
+    gap: var(--gap-default);
+    padding: var(--padding-small);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background: var(--card-background-color);
+  }
+
+  &__volume,
+  &__select {
+    display: flex;
+    flex-flow: column;
+    gap: var(--gap-mini);
+  }
+
+  &__volume {
+    flex: 1 1 16rem;
+    min-width: 14rem;
+    display: grid;
+    grid-template-columns: auto minmax(8rem, 1fr) 3.5rem auto;
+    align-items: center;
+    gap: var(--gap-small);
+
+    label {
+      color: var(--text-color);
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--text-button-primary-background-color);
+    }
+
+    span {
+      color: var(--modest-text-color);
+      text-align: right;
+    }
+
+    button {
+      min-height: 2.25rem;
+      padding: var(--padding-micro) var(--padding-small);
+      border: 1px solid var(--input-border-color);
+      border-radius: var(--border-radius);
+      background: var(--input-background-color);
+      color: var(--text-color);
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible {
+        border-color: var(--input-focus-border-color);
+      }
+    }
+  }
+
+  &__select {
+    min-width: 10rem;
+
+    span {
+      color: var(--text-color);
+    }
+
+    select {
+      min-height: 2.25rem;
+      padding: var(--padding-micro) var(--padding-small);
+      border: 1px solid var(--input-border-color);
+      border-radius: var(--border-radius);
+      background: var(--input-background-color);
+      color: var(--text-color);
+
+      &:disabled {
+        color: var(--modest-text-color);
+        cursor: not-allowed;
+      }
+    }
+  }
+
   &__hint,
   &__error {
     margin: 0;
@@ -466,6 +544,23 @@ $series-backdrop-mobile-height: 150px;
 
     &__video {
       max-height: 55vh;
+    }
+
+    &__controls {
+      align-items: stretch;
+    }
+
+    &__volume {
+      min-width: 100%;
+      grid-template-columns: auto minmax(0, 1fr) 3.5rem;
+
+      button {
+        grid-column: 1 / -1;
+      }
+    }
+
+    &__select {
+      flex: 1 1 100%;
     }
   }
 }

@@ -24,8 +24,8 @@ use shared::{
     utils::{format_float_localized, Internable},
 };
 use std::{cell::RefCell, collections::{BTreeMap, HashMap}, rc::Rc, str::FromStr};
-use wasm_bindgen::{closure::Closure, JsCast};
-use web_sys::{HtmlInputElement, HtmlVideoElement};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlVideoElement};
 use yew::{platform::spawn_local, prelude::*};
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -38,10 +38,20 @@ extern "C" {
         is_mpeg_ts: bool,
         is_live: bool,
         on_error: &js_sys::Function,
+        on_tracks: &js_sys::Function,
     ) -> wasm_bindgen::JsValue;
 
     #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = detachTuliproxVideo)]
     fn detach_tuliprox_video(handle: &wasm_bindgen::JsValue, video: &HtmlVideoElement);
+
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = setTuliproxVideoQuality)]
+    fn set_tuliprox_video_quality(video: &HtmlVideoElement, index: i32);
+
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = setTuliproxVideoAudio)]
+    fn set_tuliprox_video_audio(video: &HtmlVideoElement, index: i32);
+
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = setTuliproxVideoSubtitle)]
+    fn set_tuliprox_video_subtitle(video: &HtmlVideoElement, index: i32);
 }
 
 const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
@@ -224,11 +234,58 @@ struct BrowserPlayerProps {
     is_live: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+struct BrowserPlayerTrack {
+    index: i32,
+    label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+struct BrowserPlayerTracks {
+    #[serde(default)]
+    qualities: Vec<BrowserPlayerTrack>,
+    #[serde(default)]
+    audio_tracks: Vec<BrowserPlayerTrack>,
+    #[serde(default)]
+    subtitle_tracks: Vec<BrowserPlayerTrack>,
+    #[serde(default = "default_player_track_index")]
+    selected_quality: i32,
+    #[serde(default = "default_player_track_index")]
+    selected_audio: i32,
+    #[serde(default = "default_subtitle_track_index")]
+    selected_subtitle: i32,
+    #[serde(default)]
+    source_width: u32,
+    #[serde(default)]
+    source_height: u32,
+}
+
+const fn default_player_track_index() -> i32 { 0 }
+
+const fn default_subtitle_track_index() -> i32 { -1 }
+
+fn localized_player_track_label(
+    track: &BrowserPlayerTrack,
+    translate: &crate::i18n::YewI18n,
+    track_kind: &str,
+) -> String {
+    if track.index == -1 && track_kind == "quality" {
+        translate.t("MESSAGES.PLAYBACK.AUTO")
+    } else if track.index == -1 && track_kind == "subtitle" {
+        translate.t("MESSAGES.PLAYBACK.SUBTITLES_OFF")
+    } else {
+        track.label.clone()
+    }
+}
+
 #[function_component(BrowserPlayer)]
 fn browser_player(props: &BrowserPlayerProps) -> Html {
     let translate = use_translation();
     let video_ref = use_node_ref();
     let playback_error = use_state(|| false);
+    let player_tracks = use_state(BrowserPlayerTracks::default);
+    let volume = use_state(|| 1.0_f64);
+    let muted = use_state(|| false);
 
     {
         let title = props.title.clone();
@@ -250,11 +307,22 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     {
         let video_ref = video_ref.clone();
         let playback_error = playback_error.clone();
+        let player_tracks = player_tracks.clone();
         let dependencies = (props.src.clone(), props.is_hls, props.is_mpeg_ts, props.is_live);
         use_effect_with(dependencies, move |(src, is_hls, is_mpeg_ts, is_live)| {
+            player_tracks.set(BrowserPlayerTracks::default());
             let player = video_ref.cast::<HtmlVideoElement>().map(|video| {
                 let playback_error = playback_error.clone();
+                let player_tracks = player_tracks.clone();
                 let on_error = Closure::<dyn FnMut()>::new(move || playback_error.set(true));
+                let on_tracks = Closure::<dyn FnMut(JsValue)>::new(move |payload: JsValue| {
+                    let Some(payload) = payload.as_string() else {
+                        return;
+                    };
+                    if let Ok(tracks) = serde_json::from_str::<BrowserPlayerTracks>(&payload) {
+                        player_tracks.set(tracks);
+                    }
+                });
                 let player_handle = attach_tuliprox_video(
                     &video,
                     src,
@@ -262,18 +330,106 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     *is_mpeg_ts,
                     *is_live,
                     on_error.as_ref().unchecked_ref(),
+                    on_tracks.as_ref().unchecked_ref(),
                 );
-                (video, player_handle, on_error)
+                (video, player_handle, on_error, on_tracks)
             });
 
             move || {
-                if let Some((video, player_handle, on_error)) = player {
+                if let Some((video, player_handle, on_error, on_tracks)) = player {
                     detach_tuliprox_video(&player_handle, &video);
                     drop(on_error);
+                    drop(on_tracks);
                 }
             }
         });
     }
+
+    let on_volume_input = {
+        let video_ref = video_ref.clone();
+        let volume = volume.clone();
+        let muted = muted.clone();
+        Callback::from(move |event: InputEvent| {
+            let Some(input) = event.target_dyn_into::<HtmlInputElement>() else {
+                return;
+            };
+            let next_volume = input.value_as_number().clamp(0.0, 1.0);
+            volume.set(next_volume);
+            if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                video.set_volume(next_volume);
+                if next_volume > 0.0 {
+                    video.set_muted(false);
+                    muted.set(false);
+                }
+            }
+        })
+    };
+
+    let on_volume_change = {
+        let video_ref = video_ref.clone();
+        let volume = volume.clone();
+        let muted = muted.clone();
+        Callback::from(move |_| {
+            if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                volume.set(video.volume());
+                muted.set(video.muted());
+            }
+        })
+    };
+
+    let on_toggle_mute = {
+        let video_ref = video_ref.clone();
+        let muted = muted.clone();
+        Callback::from(move |_| {
+            if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                let next_muted = !video.muted();
+                video.set_muted(next_muted);
+                muted.set(next_muted);
+            }
+        })
+    };
+
+    let on_quality_change = {
+        let video_ref = video_ref.clone();
+        Callback::from(move |event: Event| {
+            let Some(select) = event.target_dyn_into::<HtmlSelectElement>() else {
+                return;
+            };
+            if let Ok(index) = select.value().parse::<i32>() {
+                if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                    set_tuliprox_video_quality(&video, index);
+                }
+            }
+        })
+    };
+
+    let on_audio_change = {
+        let video_ref = video_ref.clone();
+        Callback::from(move |event: Event| {
+            let Some(select) = event.target_dyn_into::<HtmlSelectElement>() else {
+                return;
+            };
+            if let Ok(index) = select.value().parse::<i32>() {
+                if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                    set_tuliprox_video_audio(&video, index);
+                }
+            }
+        })
+    };
+
+    let on_subtitle_change = {
+        let video_ref = video_ref.clone();
+        Callback::from(move |event: Event| {
+            let Some(select) = event.target_dyn_into::<HtmlSelectElement>() else {
+                return;
+            };
+            if let Ok(index) = select.value().parse::<i32>() {
+                if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                    set_tuliprox_video_subtitle(&video, index);
+                }
+            }
+        })
+    };
 
     html! {
         <div class="tp__browser-player">
@@ -286,7 +442,96 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 playsinline=true
                 preload="metadata"
                 aria-label={props.title.clone()}
+                onvolumechange={on_volume_change}
             />
+            <div class="tp__browser-player__controls" aria-label={translate.t("MESSAGES.PLAYBACK.CONTROLS")}>
+                <div class="tp__browser-player__volume">
+                    <label for="tp-player-volume">{translate.t("MESSAGES.PLAYBACK.VOLUME")}</label>
+                    <input
+                        id="tp-player-volume"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={volume.to_string()}
+                        aria-label={translate.t("MESSAGES.PLAYBACK.VOLUME")}
+                        oninput={on_volume_input}
+                    />
+                    <span>{format!("{}%", ((*volume * 100.0).round() as u32))}</span>
+                    <button type="button" onclick={on_toggle_mute} aria-label={if *muted {
+                        translate.t("MESSAGES.PLAYBACK.UNMUTE")
+                    } else {
+                        translate.t("MESSAGES.PLAYBACK.MUTE")
+                    }}>{if *muted {
+                        translate.t("MESSAGES.PLAYBACK.UNMUTE")
+                    } else {
+                        translate.t("MESSAGES.PLAYBACK.MUTE")
+                    }}</button>
+                </div>
+                {if !player_tracks.qualities.is_empty() {
+                    html! {
+                        <label class="tp__browser-player__select">
+                            <span>{translate.t("MESSAGES.PLAYBACK.QUALITY")}</span>
+                            <select
+                                value={player_tracks.selected_quality.to_string()}
+                                disabled={player_tracks.qualities.len() <= 1}
+                                onchange={on_quality_change.clone()}
+                                aria-label={translate.t("MESSAGES.PLAYBACK.QUALITY")}
+                            >
+                                {for player_tracks.qualities.iter().map(|track| html! {
+                                    <option value={track.index.to_string()} selected={track.index == player_tracks.selected_quality}>
+                                        {localized_player_track_label(track, &translate, "quality")}
+                                    </option>
+                                })}
+                            </select>
+                        </label>
+                    }
+                } else {
+                    Html::default()
+                }}
+                {if !player_tracks.audio_tracks.is_empty() {
+                    html! {
+                        <label class="tp__browser-player__select">
+                            <span>{translate.t("MESSAGES.PLAYBACK.AUDIO")}</span>
+                            <select
+                                value={player_tracks.selected_audio.to_string()}
+                                disabled={player_tracks.audio_tracks.len() <= 1}
+                                onchange={on_audio_change.clone()}
+                                aria-label={translate.t("MESSAGES.PLAYBACK.AUDIO")}
+                            >
+                                {for player_tracks.audio_tracks.iter().map(|track| html! {
+                                    <option value={track.index.to_string()} selected={track.index == player_tracks.selected_audio}>
+                                        {track.label.clone()}
+                                    </option>
+                                })}
+                            </select>
+                        </label>
+                    }
+                } else {
+                    Html::default()
+                }}
+                {if !player_tracks.subtitle_tracks.is_empty() {
+                    html! {
+                        <label class="tp__browser-player__select">
+                            <span>{translate.t("MESSAGES.PLAYBACK.SUBTITLES")}</span>
+                            <select
+                                value={player_tracks.selected_subtitle.to_string()}
+                                disabled={player_tracks.subtitle_tracks.len() <= 1}
+                                onchange={on_subtitle_change.clone()}
+                                aria-label={translate.t("MESSAGES.PLAYBACK.SUBTITLES")}
+                            >
+                                {for player_tracks.subtitle_tracks.iter().map(|track| html! {
+                                    <option value={track.index.to_string()} selected={track.index == player_tracks.selected_subtitle}>
+                                        {localized_player_track_label(track, &translate, "subtitle")}
+                                    </option>
+                                })}
+                            </select>
+                        </label>
+                    }
+                } else {
+                    Html::default()
+                }}
+            </div>
             <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
             {if *playback_error {
                 html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }

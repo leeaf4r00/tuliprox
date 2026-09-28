@@ -15,6 +15,45 @@ use shared::{
     utils::concat_path_leading_slash,
 };
 use std::rc::Rc;
+use web_sys::window;
+
+fn origin_host(origin: &str) -> Option<&str> {
+    let authority = origin.split_once("://")?.1.split('/').next()?;
+    authority.strip_prefix('[').map_or_else(
+        || authority.split(':').next(),
+        |host| host.split(']').next(),
+    )
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    matches!(origin_host(origin), Some("localhost" | "127.0.0.1" | "::1"))
+}
+
+fn rewrite_loopback_origin(page_origin: &str, url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_owned();
+    };
+    let authority_start = scheme_end + 3;
+    let Some(path_offset) = url[authority_start..].find('/') else {
+        return url.to_owned();
+    };
+    let origin_end = authority_start + path_offset;
+    let source_origin = &url[..origin_end];
+
+    if !is_loopback_origin(source_origin) || page_origin == source_origin {
+        return url.to_owned();
+    }
+
+    format!("{page_origin}{}", &url[origin_end..])
+}
+
+fn normalize_webplayer_url(url: String) -> String {
+    let Some(page_origin) = window().and_then(|win| win.location().origin().ok()) else {
+        return url;
+    };
+
+    rewrite_loopback_origin(&page_origin, &url)
+}
 
 pub struct PlaylistService {
     target_update_api_path: String,
@@ -145,7 +184,7 @@ impl PlaylistService {
             }
         }
 
-        request_post::<&PlaylistUrlResolveRequest, String>(
+        let resolved = request_post::<&PlaylistUrlResolveRequest, String>(
             &self.playlist_api_resolve_url_path,
             &request,
             None,
@@ -155,7 +194,13 @@ impl PlaylistService {
         .unwrap_or_else(|err| {
             error!("{err}");
             None
-        })
+        });
+
+        if matches!(request, PlaylistUrlResolveRequest::Webplayer { .. }) {
+            resolved.map(normalize_webplayer_url)
+        } else {
+            resolved
+        }
     }
 
     pub async fn get_playlist_epg(&self, request: PlaylistEpgRequest) -> Option<EpgTv> {
@@ -272,9 +317,27 @@ fn to_ui_playlist_groups(list: Vec<UiPlaylistItem>, xtream_cluster: XtreamCluste
 mod tests {
     use super::{
         build_input_playlist_update_request, build_playlist_update_bulk_request, build_playlist_update_request,
+        rewrite_loopback_origin,
     };
     use crate::model::{InputUpdateCapabilities, InputUpdateCapabilitiesExt};
     use shared::model::{ConfigInputDto, InputRefreshOverride, InputRefreshPolicy, InputType};
+
+    #[test]
+    fn webplayer_loopback_origin_follows_the_page_origin() {
+        let url = "http://127.0.0.1:8901/api/v1/playlist/webplayer/token/2/movie/5159";
+
+        assert_eq!(
+            rewrite_loopback_origin("http://localhost:8901", url),
+            "http://localhost:8901/api/v1/playlist/webplayer/token/2/movie/5159"
+        );
+    }
+
+    #[test]
+    fn webplayer_external_origin_is_preserved() {
+        let url = "https://stream.example.test/api/v1/playlist/webplayer/token/2/movie/5159";
+
+        assert_eq!(rewrite_loopback_origin("http://localhost:8901", url), url);
+    }
 
     #[test]
     fn playlist_update_action_rescan_sends_selected_ids_without_a_provider_policy() {

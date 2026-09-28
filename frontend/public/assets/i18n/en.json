@@ -1963,9 +1963,18 @@
       "WEBPLAYER_URL_COPY_TO_CLIPBOARD": "The copied WebPlayer url is valid for 30 seconds."
     },
     "PLAYBACK": {
-      "BROWSER_HINT": "Use the video controls to start playback. HLS and MPEG-TS are supported; seeking in .ts files may be limited.",
+      "BROWSER_HINT": "Use the video controls to start playback. Volume, resolution, audio, and subtitle options appear when the source provides them. HLS and MPEG-TS are supported; seeking in .ts files may be limited.",
       "ERROR": "The browser could not play this video. Its format may be unsupported or the provider may have blocked the stream.",
-      "NO_URL": "Could not get a playable stream URL for this item."
+      "NO_URL": "Could not get a playable stream URL for this item.",
+      "CONTROLS": "Playback controls",
+      "VOLUME": "Volume",
+      "MUTE": "Mute",
+      "UNMUTE": "Unmute",
+      "QUALITY": "Resolution",
+      "AUDIO": "Audio",
+      "SUBTITLES": "Subtitles",
+      "AUTO": "Auto",
+      "SUBTITLES_OFF": "Off"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Select a playlist to view its content.",
