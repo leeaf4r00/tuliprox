@@ -11,6 +11,11 @@ inputs:
   - name: iptv-org
     type: m3u
     url: https://iptv-org.github.io/iptv/countries/uk.m3u
+  # Optional provider playlist. Set DNSACC_M3U_URL in the local config/.env before enabling it.
+  - name: dnsacc
+    type: m3u
+    enabled: false
+    url: "${env:DNSACC_M3U_URL}"
 sources:
   - inputs:
       - iptv-org
@@ -108,3 +113,12 @@ sources:
           share_live_streams:
             hls: true
             mpeg_ts: true
+  - inputs:
+      - dnsacc
+    targets:
+      - name: dnsacc
+        enabled: false
+        output:
+          - type: xtream
+          - type: m3u
+            filename: dnsacc.m3u
