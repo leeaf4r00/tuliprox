@@ -858,6 +858,13 @@
     "WEB_ROOT": "Web-Root: Содержит файлы веб-интерфейса. Они обычно размещаются в той же директории под ./web"
   },
   "LABEL": {
+    "ADD_SERIES_TO_FAVORITES": "Добавить сериал в избранное",
+    "REMOVE_SERIES_FROM_FAVORITES": "Удалить сериал из избранного",
+    "FAVORITE_SERIES": "Избранные сериалы",
+    "SHOW_FAVORITE_SERIES": "Показать избранные сериалы",
+    "SHOW_ALL_SERIES": "Показать все сериалы",
+    "NO_FAVORITE_SERIES": "Вы ещё не добавили ни одного сериала в избранное",
+    "FAVORITE_SERIES_HINT": "Нажмите на звезду на постере сериала, чтобы сохранить его здесь.",
     "BACK": "Назад",
     "BOUQUETS": "Букеты",
     "ALL_TARGETS": "Все цели",
@@ -1847,7 +1854,10 @@
       "EPISODE_NAVIGATION": "Навигация по сериям",
       "PREVIOUS_EPISODE": "Предыдущая",
       "NEXT_EPISODE": "Следующая серия",
-      "EPISODE_LOADING": "Загрузка серии..."
+      "EPISODE_LOADING": "Загрузка серии...",
+      "DOWNLOAD_EPISODE": "Скачать текущую серию",
+      "DOWNLOADING_EPISODE": "Добавление в очередь...",
+      "RESUME_FROM": "Продолжить с места остановки"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Выберите плейлист для просмотра содержимого."

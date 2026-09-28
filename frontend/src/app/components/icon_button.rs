@@ -21,6 +21,8 @@ pub struct IconButtonProps {
     #[prop_or_default]
     pub aria_expanded: Option<bool>,
     #[prop_or_default]
+    pub aria_pressed: Option<bool>,
+    #[prop_or_default]
     pub aria_label: Option<String>,
     #[prop_or_default]
     pub aria_required: Option<bool>,
@@ -45,6 +47,7 @@ pub fn IconButton(props: &IconButtonProps) -> Html {
                 role={props.role.clone()}
                 aria-haspopup={props.aria_haspopup.clone()}
                 aria-expanded={props.aria_expanded.map(|v| v.to_string())}
+                aria-pressed={props.aria_pressed.map(|v| v.to_string())}
                 aria-label={props.aria_label.clone()}
                 aria-required={props.role.is_some().then(|| props.aria_required.map(|v| v.to_string())).flatten()}
                 aria-invalid={props.role.is_some().then(|| props.aria_invalid.map(|v| v.to_string())).flatten()}

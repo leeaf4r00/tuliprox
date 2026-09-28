@@ -899,6 +899,13 @@
     "WEB_ROOT": "Web-Root: Contains the web-ui files. They are normally placed in the same directory under ./web"
   },
   "LABEL": {
+    "ADD_SERIES_TO_FAVORITES": "Add series to favorites",
+    "REMOVE_SERIES_FROM_FAVORITES": "Remove series from favorites",
+    "FAVORITE_SERIES": "Favorite series",
+    "SHOW_FAVORITE_SERIES": "Show favorite series",
+    "SHOW_ALL_SERIES": "Show all series",
+    "NO_FAVORITE_SERIES": "You have not favorited any series yet",
+    "FAVORITE_SERIES_HINT": "Select the star on a series poster to save it here.",
     "ALL_TARGETS": "All targets",
     "ACCEPT_INSECURE_SSL_CERTIFICATES": "Accept Insecure SSL Certificates",
     "ACTIVE": "Active",
@@ -1979,7 +1986,10 @@
       "EPISODE_NAVIGATION": "Episode navigation",
       "PREVIOUS_EPISODE": "Previous",
       "NEXT_EPISODE": "Next episode",
-      "EPISODE_LOADING": "Loading episode..."
+      "EPISODE_LOADING": "Loading episode...",
+      "DOWNLOAD_EPISODE": "Download current episode",
+      "DOWNLOADING_EPISODE": "Adding to downloads...",
+      "RESUME_FROM": "Resume where you left off"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Select a playlist to view its content.",

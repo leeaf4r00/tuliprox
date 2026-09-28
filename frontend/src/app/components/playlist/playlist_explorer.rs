@@ -23,7 +23,13 @@ use shared::{
     },
     utils::{format_float_localized, Internable},
 };
-use std::{cell::RefCell, collections::{BTreeMap, HashMap}, rc::Rc, str::FromStr};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap, HashSet},
+    hash::{Hash, Hasher},
+    rc::Rc,
+    str::FromStr,
+};
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlVideoElement};
 use yew::{platform::spawn_local, prelude::*};
@@ -55,6 +61,60 @@ extern "C" {
 }
 
 const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
+const TP_EXPLORER_FAVORITE_SERIES_KEY: &str = "tp-explorer-favorite-series";
+
+fn series_favorite_key(title: &str) -> String {
+    title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+fn browser_player_resume_key(episode_id: u32, title: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    episode_id.hash(&mut hasher);
+    title.to_lowercase().hash(&mut hasher);
+    format!("tp-browser-player-resume-{:016x}", hasher.finish())
+}
+
+fn save_browser_player_position(video: &HtmlVideoElement, key: &str) -> Option<f64> {
+    let position = video.current_time();
+    let duration = video.duration();
+    if !position.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+
+    if duration - position <= 10.0 {
+        crate::utils::remove_local_storage_item(key);
+        return None;
+    }
+
+    if position >= 5.0 {
+        crate::utils::set_local_storage_item(key, &position.to_string());
+        return Some(position);
+    }
+
+    None
+}
+
+fn format_player_time(seconds: f64) -> String {
+    let total_seconds = seconds.max(0.0) as u64;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
+}
+
+fn load_favorite_series() -> HashSet<String> {
+    crate::utils::get_local_storage_item(TP_EXPLORER_FAVORITE_SERIES_KEY)
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|title| series_favorite_key(&title))
+        .filter(|title| !title.is_empty())
+        .collect()
+}
 
 #[derive(Clone)]
 struct ChannelSelection {
@@ -232,6 +292,7 @@ struct BrowserPlayerEpisode {
     title: String,
     label: String,
     url: String,
+    input_name: String,
     season: u32,
     episode: u32,
 }
@@ -246,6 +307,7 @@ struct BrowserPlayerProps {
     current_episode_id: Option<u32>,
     episodes: Vec<BrowserPlayerEpisode>,
     playlist_request: Option<PlaylistRequest>,
+    can_download: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -313,6 +375,28 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         .unwrap_or_default();
     let current_episode_index = use_state(|| initial_episode_index);
     let switching_episode = use_state(|| false);
+    let downloading_episode = use_state(|| false);
+    let saved_resume_position = use_state(|| 0.0_f64);
+    let resume_key = props
+        .episodes
+        .get(*current_episode_index)
+        .map(|episode| browser_player_resume_key(episode.virtual_id, &episode.title))
+        .unwrap_or_else(|| browser_player_resume_key(current_episode_id.unwrap_or_default(), &current_title));
+    let last_saved_position = use_mut_ref(|| (resume_key.clone(), 0.0_f64));
+
+    {
+        let saved_resume_position = saved_resume_position.clone();
+        let last_saved_position = last_saved_position.clone();
+        use_effect_with(resume_key.clone(), move |key| {
+            let saved_position = crate::utils::get_local_storage_item(key)
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|position| position.is_finite() && *position > 10.0)
+                .unwrap_or_default();
+            saved_resume_position.set(saved_position);
+            *last_saved_position.borrow_mut() = (key.clone(), 0.0);
+            || {}
+        });
+    }
 
     {
         let title = (*current_title).clone();
@@ -494,10 +578,119 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     };
     let on_video_ended = {
         let on_select_episode = on_select_episode.clone();
+        let resume_key = resume_key.clone();
         Callback::from(move |_: Event| {
+            crate::utils::remove_local_storage_item(&resume_key);
             if let Some(index) = next_episode_index {
                 on_select_episode.emit(index);
             }
+        })
+    };
+
+    let on_video_time_update = {
+        let resume_key = resume_key.clone();
+        let last_saved_position = last_saved_position.clone();
+        Callback::from(move |event: Event| {
+            let Some(video) = event.target_dyn_into::<HtmlVideoElement>() else {
+                return;
+            };
+            let position = video.current_time();
+            let duration = video.duration();
+            let mut last_saved = last_saved_position.borrow_mut();
+            if last_saved.0 != resume_key {
+                *last_saved = (resume_key.clone(), 0.0);
+            }
+            if (position - last_saved.1 >= 5.0) || (duration.is_finite() && duration - position <= 10.0) {
+                last_saved.1 = save_browser_player_position(&video, &resume_key).unwrap_or_default();
+            }
+        })
+    };
+    let on_video_pause = {
+        let resume_key = resume_key.clone();
+        Callback::from(move |event: Event| {
+            if let Some(video) = event.target_dyn_into::<HtmlVideoElement>() {
+                save_browser_player_position(&video, &resume_key);
+            }
+        })
+    };
+    let on_resume_playback = {
+        let video_ref = video_ref.clone();
+        let saved_resume_position = saved_resume_position.clone();
+        Callback::from(move |_| {
+            if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                video.set_current_time(*saved_resume_position);
+                let _ = video.play();
+                saved_resume_position.set(0.0);
+            }
+        })
+    };
+    let on_download_episode = {
+        let episode = props.episodes.get(*current_episode_index).cloned();
+        let playlist_request = props.playlist_request.clone();
+        let services = services.clone();
+        let translate = translate.clone();
+        let downloading_episode = downloading_episode.clone();
+        let can_download = props.can_download;
+        Callback::from(move |_| {
+            if !can_download || *downloading_episode {
+                return;
+            }
+            let Some(episode) = episode.clone() else {
+                return;
+            };
+
+            downloading_episode.set(true);
+            let playlist_request = playlist_request.clone();
+            let services = services.clone();
+            let translate = translate.clone();
+            let downloading_episode = downloading_episode.clone();
+            spawn_local(async move {
+                let resolved_url = match playlist_request.as_ref() {
+                    Some(PlaylistRequest::Target(target_id)) => {
+                        let request = PlaylistUrlResolveRequest::Webplayer {
+                            target_id: *target_id,
+                            virtual_id: episode.virtual_id,
+                            cluster: XtreamCluster::Series,
+                        };
+                        services.playlist.resolve_url(request).await.unwrap_or_default()
+                    }
+                    Some(request) => {
+                        let source_url = if !episode.url.is_empty() {
+                            episode.url.clone()
+                        } else {
+                            services
+                                .playlist
+                                .get_episode(episode.virtual_id, request)
+                                .await
+                                .map_or_else(String::new, |item| item.url.to_string())
+                        };
+                        if source_url.is_empty() {
+                            String::new()
+                        } else {
+                            let resolve_request = PlaylistUrlResolveRequest::Provider {
+                                playlist_request: request.clone(),
+                                url: source_url.clone(),
+                            };
+                            services.playlist.resolve_url(resolve_request).await.unwrap_or(source_url)
+                        }
+                    }
+                    None => episode.url.clone(),
+                };
+
+                if resolved_url.is_empty() {
+                    services.toastr.error(translate.t("MESSAGES.DOWNLOAD.FAIL"));
+                    downloading_episode.set(false);
+                    return;
+                }
+
+                let filename = build_download_filename(&episode.title, &resolved_url);
+                let input_name = normalize_input_name(&episode.input_name);
+                match services.downloads.queue_download(resolved_url, filename, input_name, None).await {
+                    Ok(_) => services.toastr.success(translate.t("MESSAGES.DOWNLOAD.DOWNLOAD_QUEUED")),
+                    Err(_) => services.toastr.error(translate.t("MESSAGES.DOWNLOAD.FAIL")),
+                }
+                downloading_episode.set(false);
+            });
         })
     };
 
@@ -606,6 +799,8 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     preload="metadata"
                     aria-label={(*current_title).clone()}
                     onvolumechange={on_volume_change}
+                    ontimeupdate={on_video_time_update}
+                    onpause={on_video_pause}
                     onended={on_video_ended}
                 />
                 <div class="tp__browser-player__controls" aria-label={translate.t("MESSAGES.PLAYBACK.CONTROLS")}>
@@ -632,6 +827,26 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                         translate.t("MESSAGES.PLAYBACK.MUTE")
                     }}</button>
                 </div>
+                {if props.can_download && !props.episodes.is_empty() {
+                    html! {
+                        <button
+                            type="button"
+                            class="tp__browser-player__download-button"
+                            disabled={*switching_episode || *downloading_episode}
+                            onclick={on_download_episode}
+                            aria-label={translate.t("MESSAGES.PLAYBACK.DOWNLOAD_EPISODE")}
+                        >
+                            <AppIcon name="Download" />
+                            {if *downloading_episode {
+                                translate.t("MESSAGES.PLAYBACK.DOWNLOADING_EPISODE")
+                            } else {
+                                translate.t("MESSAGES.PLAYBACK.DOWNLOAD_EPISODE")
+                            }}
+                        </button>
+                    }
+                } else {
+                    Html::default()
+                }}
                 {if !player_tracks.qualities.is_empty() {
                     html! {
                         <label class="tp__browser-player__select">
@@ -696,6 +911,22 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     Html::default()
                 }}
                 </div>
+                {if *saved_resume_position > 10.0 && !props.is_live {
+                    html! {
+                        <button
+                            type="button"
+                            class="tp__browser-player__resume-button"
+                            onclick={on_resume_playback}
+                        >
+                            <AppIcon name="PlayArrow" />
+                            {translate.t("MESSAGES.PLAYBACK.RESUME_FROM")}
+                            {" · "}
+                            {format_player_time(*saved_resume_position)}
+                        </button>
+                    }
+                } else {
+                    Html::default()
+                }}
                 <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
                 {if *playback_error {
                     html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }
@@ -781,6 +1012,7 @@ enum ExplorerLevel {
     Group(Rc<UiPlaylistGroup>),
     SeriesFolder(Rc<UiPlaylistGroup>, Rc<SeriesFolder>),
     SeriesInfo(Rc<UiPlaylistGroup>, Rc<UiPlaylistItem>, Option<Box<SeriesStreamProperties>>),
+    Favorites,
 }
 
 #[component]
@@ -821,6 +1053,36 @@ pub fn PlaylistExplorer() -> Html {
     let recording_padding = Rc::new(recording_padding);
     let current_item = use_state(|| ExplorerLevel::Categories);
     let playlist = use_state(|| (*context.playlist).clone());
+    let favorite_series = use_state(load_favorite_series);
+    let handle_toggle_series_favorite = {
+        let favorite_series = favorite_series.clone();
+        Callback::from(move |title: String| {
+            let key = series_favorite_key(&title);
+            if key.is_empty() {
+                return;
+            }
+            let mut next = (*favorite_series).clone();
+            if !next.remove(&key) {
+                next.insert(key);
+            }
+            let mut persisted = next.iter().cloned().collect::<Vec<_>>();
+            persisted.sort();
+            if let Ok(value) = serde_json::to_string(&persisted) {
+                crate::utils::set_local_storage_item(TP_EXPLORER_FAVORITE_SERIES_KEY, &value);
+            }
+            favorite_series.set(next);
+        })
+    };
+    let handle_favorites_toggle = {
+        let current_item = current_item.clone();
+        Callback::from(move |(_name, _event): (String, MouseEvent)| {
+            if matches!(&*current_item, ExplorerLevel::Favorites) {
+                current_item.set(ExplorerLevel::Categories);
+            } else {
+                current_item.set(ExplorerLevel::Favorites);
+            }
+        })
+    };
     let search_fields = use_memo((), |()| {
         let persisted: Vec<String> = crate::utils::get_local_storage_item(TP_EXPLORER_SEARCH_FIELDS_KEY)
             .map(|value| value.split(',').filter(|id| !id.is_empty()).map(str::to_string).collect())
@@ -944,17 +1206,6 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
-    let handle_series_onclick = {
-        let set_current_item = current_item.clone();
-        Callback::from(move |(dto, event): (Rc<UiPlaylistItem>, MouseEvent)| {
-            event.prevent_default();
-            event.stop_propagation();
-            if let ExplorerLevel::Group(ref group) = *set_current_item {
-                load_series_info(group.clone(), dto.clone());
-            }
-        })
-    };
-
     {
         let set_playlist = playlist.clone();
         let set_current_item = current_item.clone();
@@ -1057,6 +1308,7 @@ pub fn PlaylistExplorer() -> Html {
                                         current_episode_id={current_episode_id}
                                         episodes={episodes}
                                         playlist_request={playlist_request}
+                                        can_download={can_write_downloads}
                                     />
                                 };
                                 let _ = dialog.content(content, None, true).await;
@@ -1415,6 +1667,9 @@ pub fn PlaylistExplorer() -> Html {
             ExplorerLevel::SeriesInfo(ref group, _, _) => {
                 current_item.set(ExplorerLevel::Group(group.clone()));
             }
+            ExplorerLevel::Favorites => {
+                current_item.set(ExplorerLevel::Categories);
+            }
         })
     };
 
@@ -1530,6 +1785,33 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
+    let render_series_favorite_button = |title: &str| {
+        let key = series_favorite_key(title);
+        let is_favorite = favorite_series.contains(&key);
+        let label_key = if is_favorite {
+            "LABEL.REMOVE_SERIES_FROM_FAVORITES"
+        } else {
+            "LABEL.ADD_SERIES_TO_FAVORITES"
+        };
+        let label = format!("{}: {title}", translate.t(label_key));
+        let favorite_title = key.clone();
+        let toggle_favorite = handle_toggle_series_favorite.clone();
+        let onclick = Callback::from(move |(_name, _event): (String, MouseEvent)| {
+            toggle_favorite.emit(favorite_title.clone());
+        });
+        html! {
+            <IconButton
+                class={if is_favorite { "tp__playlist-explorer__favorite-button is-favorite" } else { "tp__playlist-explorer__favorite-button" }}
+                name={key}
+                icon={if is_favorite { "Star" } else { "StarBorder" }}
+                hint={label.clone()}
+                aria_label={Some(label)}
+                aria_pressed={Some(is_favorite)}
+                onclick={onclick}
+            />
+        }
+    };
+
     let render_live = |chan: &Rc<UiPlaylistItem>| {
         let popup_onclick = handle_popup_onclick.clone();
         let chan_clone = Rc::clone(chan);
@@ -1565,13 +1847,18 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
-    let render_series = |chan: &Rc<UiPlaylistItem>| {
+    let render_series = |group: &Rc<UiPlaylistGroup>, chan: &Rc<UiPlaylistItem>| {
         let popup_onclick = handle_popup_onclick.clone();
         let chan_clone = Rc::clone(chan);
         let chan_click = {
             let chan_clone = chan.clone();
-            let series_click = handle_series_onclick.clone();
-            Callback::from(move |event: MouseEvent| series_click.emit((chan_clone.clone(), event)))
+            let group = group.clone();
+            let load_series_info = load_series_info.clone();
+            Callback::from(move |event: MouseEvent| {
+                event.prevent_default();
+                event.stop_propagation();
+                load_series_info(group.clone(), chan_clone.clone());
+            })
         };
         html! {
             <span onclick={chan_click} class="tp__playlist-explorer__channel tp__playlist-explorer__channel-series">
@@ -1581,11 +1868,37 @@ pub fn PlaylistExplorer() -> Html {
                         <Chip class="tp__playlist-explorer__channel-series-rating" label={format_float_localized(chan.rating, 1, false)} />
                     })
                 }
+                {render_series_favorite_button(&chan.title)}
                 <span class="tp__playlist-explorer__channel-series-info">
                     <button class="tp__icon-button" onclick={Callback::from(move |event: MouseEvent| popup_onclick.emit((chan_clone.clone(), event)))}>
                         <AppIcon name="Popup"></AppIcon>
                     </button>
                     <span class="tp__playlist-explorer__channel-series-title">{chan.title.clone()}</span>
+                </span>
+            </span>
+        }
+    };
+
+    let render_series_folder_card = |group: &Rc<UiPlaylistGroup>, folder: Rc<SeriesFolder>| {
+        let folder_title = folder.title.clone();
+        let folder_logo = folder.logo.clone();
+        let group_for_click = group.clone();
+        let folder_for_click = folder.clone();
+        let on_click = {
+            let current_item = current_item.clone();
+            Callback::from(move |event: MouseEvent| {
+                event.prevent_default();
+                event.stop_propagation();
+                current_item.set(ExplorerLevel::SeriesFolder(group_for_click.clone(), folder_for_click.clone()));
+            })
+        };
+
+        html! {
+            <span key={format!("series-folder-{folder_title}")} onclick={on_click} class="tp__playlist-explorer__channel tp__playlist-explorer__channel-series">
+                {render_channel_logo(&folder_logo, &folder_title)}
+                {render_series_favorite_button(&folder_title)}
+                <span class="tp__playlist-explorer__channel-series-info">
+                    <span class="tp__playlist-explorer__channel-series-title">{folder_title}</span>
                 </span>
             </span>
         }
@@ -1634,6 +1947,7 @@ pub fn PlaylistExplorer() -> Html {
                         title: channel.title.to_string(),
                         label: series_episode_display_title(&channel.title, &folder.title),
                         url: channel.url.to_string(),
+                        input_name: channel.input_name.to_string(),
                         season: *season,
                         episode: *episode,
                     })
@@ -1702,6 +2016,7 @@ pub fn PlaylistExplorer() -> Html {
                 <div class="tp__playlist-explorer__series-info__header">
                     <div class="tp__playlist-explorer__series-info__body-top" style={style}>
                         <div class="tp__playlist-explorer__series-info__body-top-backdrop"></div>
+                        {render_series_favorite_button(&folder.title)}
                         <div class="tp__playlist-explorer__series-info__body-top-content">
                             <span class="tp__playlist-explorer__series-info__title">{folder.title.clone()}</span>
                         </div>
@@ -1714,10 +2029,10 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
-    let render_channel = |chan: &Rc<UiPlaylistItem>| match chan.xtream_cluster {
+    let render_channel = |group: &Rc<UiPlaylistGroup>, chan: &Rc<UiPlaylistItem>| match chan.xtream_cluster {
         XtreamCluster::Live => render_live(chan),
         XtreamCluster::Video => render_movie(chan),
-        XtreamCluster::Series => render_series(chan),
+        XtreamCluster::Series => render_series(group, chan),
     };
 
     let render_group = |group: &Rc<UiPlaylistGroup>| {
@@ -1725,38 +2040,12 @@ pub fn PlaylistExplorer() -> Html {
             build_series_entries(&group.channels)
                 .into_iter()
                 .map(|entry| match entry {
-                    SeriesExplorerEntry::Item(channel) => render_series(&channel),
-                    SeriesExplorerEntry::Folder(folder) => {
-                        let folder = Rc::new(folder);
-                        let folder_title = folder.title.clone();
-                        let folder_logo = folder.logo.clone();
-                        let group_for_click = group.clone();
-                        let folder_for_click = folder.clone();
-                        let on_click = {
-                            let current_item = current_item.clone();
-                            Callback::from(move |event: MouseEvent| {
-                                event.prevent_default();
-                                event.stop_propagation();
-                                current_item.set(ExplorerLevel::SeriesFolder(
-                                    group_for_click.clone(),
-                                    folder_for_click.clone(),
-                                ));
-                            })
-                        };
-
-                        html! {
-                            <span key={format!("series-folder-{}", folder_title)} onclick={on_click} class="tp__playlist-explorer__channel tp__playlist-explorer__channel-series">
-                                {render_channel_logo(&folder_logo, &folder_title)}
-                                <span class="tp__playlist-explorer__channel-series-info">
-                                    <span class="tp__playlist-explorer__channel-series-title">{folder_title}</span>
-                                </span>
-                            </span>
-                        }
-                    }
+                    SeriesExplorerEntry::Item(channel) => render_series(group, &channel),
+                    SeriesExplorerEntry::Folder(folder) => render_series_folder_card(group, Rc::new(folder)),
                 })
                 .collect::<Html>()
         } else {
-            group.channels.iter().map(render_channel).collect::<Html>()
+            group.channels.iter().map(|channel| render_channel(group, channel)).collect::<Html>()
         };
 
         html! {
@@ -1771,6 +2060,48 @@ pub fn PlaylistExplorer() -> Html {
               }
               </div>
             </div>
+        }
+    };
+
+    let render_favorites = || {
+        let mut favorite_cards = Vec::new();
+        let mut rendered_titles = HashSet::new();
+        if let Some(groups) = playlist.as_ref().and_then(|categories| categories.series.as_ref()) {
+            for group in groups {
+                for entry in build_series_entries(&group.channels) {
+                    match entry {
+                        SeriesExplorerEntry::Item(channel) => {
+                            let key = series_favorite_key(&channel.title);
+                            if favorite_series.contains(&key) && rendered_titles.insert(key) {
+                                favorite_cards.push(render_series(group, &channel));
+                            }
+                        }
+                        SeriesExplorerEntry::Folder(folder) => {
+                            let key = series_favorite_key(&folder.title);
+                            if favorite_series.contains(&key) && rendered_titles.insert(key) {
+                                favorite_cards.push(render_series_folder_card(group, Rc::new(folder)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if favorite_cards.is_empty() {
+            html! {
+                <NoContent
+                    text={translate.t("LABEL.NO_FAVORITE_SERIES")}
+                    hint={translate.t("LABEL.FAVORITE_SERIES_HINT")}
+                />
+            }
+        } else {
+            html! {
+                <div class="tp__playlist-explorer__group">
+                    <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-series">
+                        {for favorite_cards}
+                    </div>
+                </div>
+            }
         }
     };
 
@@ -1811,6 +2142,7 @@ pub fn PlaylistExplorer() -> Html {
         let series_html = html! {
             <div class="tp__playlist-explorer__series-info__body-top" style={style}>
                 <div class="tp__playlist-explorer__series-info__body-top-backdrop"></div>
+                {render_series_favorite_button(&series_info.title)}
                 <div class="tp__playlist-explorer__series-info__body-top-content">
                     <span class="tp__playlist-explorer__series-info__title">{series_info.title.clone()}</span>
                     <span class="tp__playlist-explorer__series-info__infos">
@@ -1841,6 +2173,7 @@ pub fn PlaylistExplorer() -> Html {
                     title: episode.title.to_string(),
                     label: series_episode_display_title(&episode.title, &series_info.title),
                     url: episode.direct_source.to_string(),
+                    input_name: series_info.input_name.to_string(),
                     season: episode.season,
                     episode: episode.episode_num,
                 })
@@ -1890,18 +2223,35 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
+    let is_favorites_view = matches!(&*current_item, ExplorerLevel::Favorites);
+    let favorites_toggle_label = if is_favorites_view {
+        translate.t("LABEL.SHOW_ALL_SERIES")
+    } else {
+        translate.t("LABEL.SHOW_FAVORITE_SERIES")
+    };
+
     html! {
       <div class="tp__playlist-explorer">
         <div class="tp__playlist-explorer__header">
             <div class="tp__playlist-explorer__header-toolbar">
                 <div class="tp__playlist-explorer__header-toolbar-actions">
                    <IconButton class={if matches!(*current_item, ExplorerLevel::Categories) { "disabled" } else {""}} name="back" icon="Back" onclick={handle_back_click} />
+                   <IconButton
+                        class={if is_favorites_view { "tp__playlist-explorer__favorites-toggle active" } else { "tp__playlist-explorer__favorites-toggle" }}
+                        name="toggle-favorites"
+                        icon={if is_favorites_view { "Star" } else { "StarBorder" }}
+                        hint={favorites_toggle_label.clone()}
+                        aria_label={Some(favorites_toggle_label)}
+                        aria_pressed={Some(is_favorites_view)}
+                        onclick={handle_favorites_toggle.clone()}
+                    />
                   {
                     match *current_item {
                         ExplorerLevel::Categories => html!{} ,
                         ExplorerLevel::Group(ref group) => html!{ <span>{group.title.to_string()}</span> },
                         ExplorerLevel::SeriesFolder(_, ref folder) => html!{ <span>{folder.title.clone()}</span> },
                         ExplorerLevel::SeriesInfo(_, ref pli, _) => html!{ <span>{pli.title.to_string()}</span> },
+                        ExplorerLevel::Favorites => html!{ <span>{translate.t("LABEL.FAVORITE_SERIES")}</span> },
                     }
                   }
                 </div>
@@ -1917,6 +2267,7 @@ pub fn PlaylistExplorer() -> Html {
                 ExplorerLevel::Group(ref group) => html!{ render_group(group) },
                 ExplorerLevel::SeriesFolder(_, ref folder) => html!{ render_series_folder(folder) },
                 ExplorerLevel::SeriesInfo(_, ref pli, ref props) => html!{ render_series_info(pli, props.as_ref()) },
+                ExplorerLevel::Favorites => html!{ render_favorites() },
             }
           }
         </div>

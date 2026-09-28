@@ -895,6 +895,13 @@
     "WEB_ROOT": "Web-Root: يحتوي على ملفات واجهة الويب. عادة ما يتم وضعها في نفس الدليل تحت ./web"
   },
   "LABEL": {
+    "ADD_SERIES_TO_FAVORITES": "إضافة المسلسل إلى المفضلة",
+    "REMOVE_SERIES_FROM_FAVORITES": "إزالة المسلسل من المفضلة",
+    "FAVORITE_SERIES": "المسلسلات المفضلة",
+    "SHOW_FAVORITE_SERIES": "عرض المسلسلات المفضلة",
+    "SHOW_ALL_SERIES": "عرض جميع المسلسلات",
+    "NO_FAVORITE_SERIES": "لم تضف أي مسلسل إلى المفضلة بعد",
+    "FAVORITE_SERIES_HINT": "اضغط على النجمة في ملصق المسلسل لحفظه هنا.",
     "BACK": "رجوع",
     "BOUQUETS": "الباقات",
     "ALL_TARGETS": "جميع الأهداف",
@@ -1946,7 +1953,10 @@
       "EPISODE_NAVIGATION": "التنقل بين الحلقات",
       "PREVIOUS_EPISODE": "الحلقة السابقة",
       "NEXT_EPISODE": "الحلقة التالية",
-      "EPISODE_LOADING": "جارٍ تحميل الحلقة..."
+      "EPISODE_LOADING": "جارٍ تحميل الحلقة...",
+      "DOWNLOAD_EPISODE": "تنزيل الحلقة الحالية",
+      "DOWNLOADING_EPISODE": "جارٍ الإضافة إلى التنزيلات...",
+      "RESUME_FROM": "استئناف من حيث توقفت"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "حدد قائمة تشغيل لعرض محتواها.",

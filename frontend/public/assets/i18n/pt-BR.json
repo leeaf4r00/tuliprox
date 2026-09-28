@@ -899,6 +899,13 @@
     "WEB_ROOT": "Web-Root: Contém os arquivos web-ui. Eles normalmente são colocados no mesmo diretório em ./web"
   },
   "LABEL": {
+    "ADD_SERIES_TO_FAVORITES": "Favoritar série",
+    "REMOVE_SERIES_FROM_FAVORITES": "Remover série dos favoritos",
+    "FAVORITE_SERIES": "Séries favoritas",
+    "SHOW_FAVORITE_SERIES": "Mostrar séries favoritas",
+    "SHOW_ALL_SERIES": "Mostrar todas as séries",
+    "NO_FAVORITE_SERIES": "Você ainda não favoritou nenhuma série",
+    "FAVORITE_SERIES_HINT": "Toque na estrela de uma série para encontrá-la aqui.",
     "ALL_TARGETS": "Todos os destinos",
     "ACCEPT_INSECURE_SSL_CERTIFICATES": "Aceitar certificados SSL inseguros",
     "ACTIVE": "Ativo",
@@ -1979,7 +1986,10 @@
       "EPISODE_NAVIGATION": "Navegação de episódios",
       "PREVIOUS_EPISODE": "Anterior",
       "NEXT_EPISODE": "Próximo episódio",
-      "EPISODE_LOADING": "Carregando episódio..."
+      "EPISODE_LOADING": "Carregando episódio...",
+      "DOWNLOAD_EPISODE": "Baixar episódio atual",
+      "DOWNLOADING_EPISODE": "Adicionando à fila...",
+      "RESUME_FROM": "Continuar de onde parou"
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Selecione uma lista de reprodução para visualizar seu conteúdo.",
