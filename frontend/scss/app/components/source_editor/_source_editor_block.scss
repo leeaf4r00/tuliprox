@@ -1,7 +1,7 @@
 $block-width: 100px;
 $block-header-height: 12px;
 $block-content-height: 50px;
-$port-size: 10px;
+$port-size: 14px;
 
 .tp__source-editor__block {
   position: absolute;
@@ -130,22 +130,42 @@ $port-size: 10px;
     position: absolute;
     width: $port-size;
     height: $port-size;
+    min-width: $port-size;
+    min-height: $port-size;
     border-radius: 50%;
     border: 1px solid var(--brick-port-border-color);
+    appearance: none;
+    padding: 0;
+    margin: 0;
     cursor: crosshair;
-    z-index: 2;
+    z-index: 3;
+
+    &:focus-visible {
+      outline: 2px solid var(--input-focus-border-color);
+      outline-offset: 2px;
+    }
+
+    &::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 40px;
+      height: 40px;
+      transform: translate(-50%, -50%);
+    }
 
     &:hover {
       background-color: var(--brick-port-hover-color);
     }
 
     &--left {
-      left: -5px;
+      left: -7px;
       background-color: var(--brick-port-background-color);
     }
 
     &--right {
-      right: -5px;
+      right: -7px;
       background-color: var(--brick-port-background-color);
     }
 

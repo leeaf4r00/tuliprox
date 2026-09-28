@@ -1842,7 +1842,12 @@
       "AUDIO": "Аудио",
       "SUBTITLES": "Субтитры",
       "AUTO": "Авто",
-      "SUBTITLES_OFF": "Выключены"
+      "SUBTITLES_OFF": "Выключены",
+      "EPISODES": "Серии",
+      "EPISODE_NAVIGATION": "Навигация по сериям",
+      "PREVIOUS_EPISODE": "Предыдущая",
+      "NEXT_EPISODE": "Следующая серия",
+      "EPISODE_LOADING": "Загрузка серии..."
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Выберите плейлист для просмотра содержимого."
@@ -2116,6 +2121,7 @@
     }
   },
   "SOURCE_EDITOR": {
+    "ADD_HINT": "Нажмите, чтобы добавить блок, или перетащите его в нужное место.",
     "BRICK_InputEmby": "Emby",
     "BRICK_InputJellyfin": "Jellyfin",
     "BRICK_InputLibrary": "Библиотека",
@@ -2127,7 +2133,15 @@
     "BRICK_OutputM3u": "M3u",
     "BRICK_OutputStrm": "STRM",
     "BRICK_OutputXtream": "Xtream",
-    "BRICK_Target": "Цель"
+    "BRICK_Target": "Цель",
+    "HELP_TITLE": "Как настроить источники",
+    "HELP_ADD": "Нажмите слева, чтобы добавить блок. Источники размещаются слева, цели в центре, выходы справа.",
+    "HELP_CONFIGURE": "Дважды щёлкните блок, чтобы ввести или изменить данные.",
+    "HELP_CONNECT": "Нажмите точку справа, затем точку слева для соединения. Также можно перетащить линию.",
+    "HELP_SAVE": "Нажмите «Сохранить» вверху страницы, чтобы сохранить изменения.",
+    "CONFIGURE_HINT": "Дважды щёлкните, чтобы настроить блок.",
+    "CONNECT_OUTPUT_HINT": "Начало соединения. Нажмите здесь, затем выберите вход следующего блока.",
+    "CONNECT_INPUT_HINT": "Завершение соединения. Нажмите после выбора точки выхода."
   },
   "TITLE": {
     "USER_BOUQUET_EDITOR": "Выбор категории плейлиста"

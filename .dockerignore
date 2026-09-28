@@ -2,6 +2,9 @@
 target/
 bin/
 debug/
+backup/
+data/
+downloads/
 
 # Ignore the entire docker directory...
 docker/

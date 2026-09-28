@@ -47,6 +47,9 @@ pub fn BlockView(props: &BlockProps) -> Html {
 
     let has_input_port = block_type.has_input_port();
     let has_output_port = block_type.has_output_port();
+    let configure_hint = translate.t("SOURCE_EDITOR.CONFIGURE_HINT");
+    let connect_output_hint = translate.t("SOURCE_EDITOR.CONNECT_OUTPUT_HINT");
+    let connect_input_hint = translate.t("SOURCE_EDITOR.CONNECT_INPUT_HINT");
 
     let port_style = match port_status {
         PortStatus::Valid => "tp__source-editor__block-port--valid",
@@ -58,7 +61,9 @@ pub fn BlockView(props: &BlockProps) -> Html {
         let on_block_mouse_down = props.on_mouse_down.clone();
         Callback::from(move |e: MouseEvent| {
             e.prevent_default();
-            if is_span_target(&e) {
+            if e.target_dyn_into::<web_sys::Element>().is_some_and(|target| {
+                matches!(target.tag_name().to_ascii_lowercase().as_str(), "span" | "button")
+            }) {
                 return;
             }
             e.stop_propagation();
@@ -73,7 +78,9 @@ pub fn BlockView(props: &BlockProps) -> Html {
     let handle_touch_start = {
         let on_block_touch_start = props.on_touch_start.clone();
         Callback::from(move |e: TouchEvent| {
-            if is_span_target(&e) {
+            if e.target_dyn_into::<web_sys::Element>().is_some_and(|target| {
+                matches!(target.tag_name().to_ascii_lowercase().as_str(), "span" | "button")
+            }) {
                 return;
             }
             e.stop_propagation();
@@ -139,7 +146,7 @@ pub fn BlockView(props: &BlockProps) -> Html {
 
     html! {
         <div id={format!("block-{block_id}")} class={format!("tp__source-editor__block no-select tp__source-editor__block-{}{}{}", block_type, if props.edited {" tp__source-editor__block-editing"} else {""}, if props.selected {" tp__source-editor__block-selected"} else {""})}
-              ref={block_ref} title={title.clone()}>
+              ref={block_ref} title={format!("{title}. {configure_hint}")}>
             <div class={"tp__source-editor__block-header"}>
                 // Block handle (drag)
                 <div class="tp__source-editor__block-handle" onmousedown={handle_mouse_down.clone()} ontouchstart={handle_touch_start.clone()} />
@@ -168,11 +175,32 @@ pub fn BlockView(props: &BlockProps) -> Html {
 
                {html_if!(has_input_port, {
                 // Left port
-                <span
+                <button type="button"
                     class={classes!("tp__source-editor__block-port", "tp__source-editor__block-port--left", port_style)}
+                    aria-label={connect_input_hint.clone()}
+                    title={connect_input_hint.clone()}
+                    onmousedown={Callback::from(|e: MouseEvent| e.stop_propagation())}
                     onmouseup={{
                         let on_connection_drop = props.on_connection_drop.clone();
                         Callback::from(move |e: MouseEvent| {
+                           e.prevent_default();
+                           e.stop_propagation();
+                           on_connection_drop.emit(to_id);
+                       })
+                    }}
+                    ondblclick={Callback::from(|e: MouseEvent| e.stop_propagation())}
+                    onclick={{
+                        let on_connection_drop = props.on_connection_drop.clone();
+                        Callback::from(move |e: MouseEvent| {
+                           e.prevent_default();
+                           e.stop_propagation();
+                           on_connection_drop.emit(to_id);
+                       })
+                    }}
+                    ontouchstart={Callback::from(|e: TouchEvent| e.stop_propagation())}
+                    ontouchend={{
+                        let on_connection_drop = props.on_connection_drop.clone();
+                        Callback::from(move |e: TouchEvent| {
                            e.prevent_default();
                            e.stop_propagation();
                            on_connection_drop.emit(to_id);
@@ -181,9 +209,11 @@ pub fn BlockView(props: &BlockProps) -> Html {
                 })}
 
                {html_if!(has_output_port, {
-                // Right port
-                <span
+                // Right port: drag to connect, or click/tap before choosing the destination.
+                <button type="button"
                     class="tp__source-editor__block-port tp__source-editor__block-port--right"
+                    aria-label={connect_output_hint.clone()}
+                    title={connect_output_hint.clone()}
                     onmousedown={{
                         let on_connection_start = props.on_connection_start.clone();
                         Callback::from(move |e: MouseEvent| {
@@ -191,7 +221,25 @@ pub fn BlockView(props: &BlockProps) -> Html {
                            e.stop_propagation();
                            on_connection_start.emit(from_id);
                         })
-                    }} />
+                    }}
+                    onclick={{
+                        let on_connection_start = props.on_connection_start.clone();
+                        Callback::from(move |e: MouseEvent| {
+                           e.prevent_default();
+                           e.stop_propagation();
+                           on_connection_start.emit(from_id);
+                        })
+                    }}
+                    ondblclick={Callback::from(|e: MouseEvent| e.stop_propagation())}
+                    ontouchstart={{
+                        let on_connection_start = props.on_connection_start.clone();
+                        Callback::from(move |e: TouchEvent| {
+                           e.prevent_default();
+                           e.stop_propagation();
+                           on_connection_start.emit(from_id);
+                        })
+                    }}
+                    ontouchend={Callback::from(|e: TouchEvent| e.stop_propagation())} />
                 })}
             </div>
            {html_if!(is_batch, {

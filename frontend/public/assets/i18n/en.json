@@ -1974,7 +1974,12 @@
       "AUDIO": "Audio",
       "SUBTITLES": "Subtitles",
       "AUTO": "Auto",
-      "SUBTITLES_OFF": "Off"
+      "SUBTITLES_OFF": "Off",
+      "EPISODES": "Episodes",
+      "EPISODE_NAVIGATION": "Episode navigation",
+      "PREVIOUS_EPISODE": "Previous",
+      "NEXT_EPISODE": "Next episode",
+      "EPISODE_LOADING": "Loading episode..."
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Select a playlist to view its content.",
@@ -2250,6 +2255,7 @@
     }
   },
   "SOURCE_EDITOR": {
+    "ADD_HINT": "Click to add to the canvas, or drag to choose a position.",
     "BRICK_InputEmby": "Emby",
     "BRICK_InputJellyfin": "Jellyfin",
     "BRICK_InputLibrary": "Library",
@@ -2262,7 +2268,15 @@
     "BRICK_OutputM3u": "M3u",
     "BRICK_OutputStrm": "STRM",
     "BRICK_OutputXtream": "Xtream",
-    "BRICK_Target": "Target"
+    "BRICK_Target": "Target",
+    "HELP_TITLE": "How to set up your sources",
+    "HELP_ADD": "Click an option on the left to add a block. Inputs go on the left, targets in the middle, and outputs on the right.",
+    "HELP_CONFIGURE": "Double-click a block to enter or change its details.",
+    "HELP_CONNECT": "Click the dot on the right, then the dot on the left to connect; you can also drag between them.",
+    "HELP_SAVE": "Use Save at the top of the page to keep your changes.",
+    "CONFIGURE_HINT": "Double-click to configure this block.",
+    "CONNECT_OUTPUT_HINT": "Start a connection here, then choose an input dot on the next block.",
+    "CONNECT_INPUT_HINT": "Finish a connection here after choosing an output dot."
   },
   "TITLE": {
     "USER_BOUQUET_EDITOR": "Playlist Category Selection"

@@ -339,6 +339,42 @@ fn world_from_screen(position: Position, canvas_offset: Position, zoom_factor: f
     ((position.0 - canvas_offset.0) / zoom_factor, (position.1 - canvas_offset.1) / zoom_factor)
 }
 
+fn next_block_screen_position(editor_state: &EditorState, canvas_width: f32, block_type: BlockType) -> Position {
+    const EDGE_GAP: f32 = 16.0;
+    const ROW_GAP: f32 = 18.0;
+
+    let column = if block_type.is_input() {
+        0.0
+    } else if block_type.is_target() {
+        1.0
+    } else {
+        2.0
+    };
+    let column_width = canvas_width.max(BLOCK_WIDTH + EDGE_GAP * 2.0) / 3.0;
+    let max_x = (canvas_width - BLOCK_WIDTH - EDGE_GAP).max(EDGE_GAP);
+    let x = (column_width * (column + 0.5) - BLOCK_WIDTH / 2.0).clamp(EDGE_GAP, max_x);
+    let block_height = BLOCK_HEIGHT + BLOCK_HEADER_HEIGHT + BLOCK_PORT_HEIGHT;
+    let row_step = block_height + ROW_GAP;
+
+    for row in 0..=editor_state.blocks.len() {
+        let y = EDGE_GAP + row as f32 * row_step;
+        let overlaps = editor_state.blocks.iter().any(|block| {
+            let (block_x, block_y) =
+                screen_from_world(block.position, editor_state.canvas_offset, editor_state.zoom_factor);
+            let separated = x + BLOCK_WIDTH + ROW_GAP <= block_x
+                || block_x + BLOCK_WIDTH + ROW_GAP <= x
+                || y + block_height + ROW_GAP <= block_y
+                || block_y + block_height + ROW_GAP <= y;
+            !separated
+        });
+        if !overlaps {
+            return (x, y);
+        }
+    }
+
+    (x, EDGE_GAP + editor_state.blocks.len() as f32 * row_step)
+}
+
 fn clamp_zoom_factor(zoom_factor: f32) -> f32 { zoom_factor.clamp(MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR) }
 
 fn initial_layout_view_transform() -> (Position, f32) { ((0.0, 0.0), 1.0) }
@@ -1384,16 +1420,9 @@ pub fn SourceEditor(props: &SourceEditorProps) -> Html {
         Callback::from(move |block_type: BlockType| {
             let position = if let Some(canvas) = canvas_ref.cast::<HtmlElement>() {
                 let rect = canvas.get_bounding_client_rect();
-                let (canvas_offset, zoom_factor) = {
-                    let editor_state = editor_state_ref.borrow();
-                    (editor_state.canvas_offset, editor_state.zoom_factor)
-                };
-                let block_height = BLOCK_HEIGHT + BLOCK_HEADER_HEIGHT + BLOCK_PORT_HEIGHT;
-                world_from_screen(
-                    ((rect.width() as f32 - BLOCK_WIDTH) / 2.0, (rect.height() as f32 - block_height) / 2.0),
-                    canvas_offset,
-                    zoom_factor,
-                )
+                let editor_state = editor_state_ref.borrow();
+                let screen_position = next_block_screen_position(&editor_state, rect.width() as f32, block_type);
+                world_from_screen(screen_position, editor_state.canvas_offset, editor_state.zoom_factor)
             } else {
                 (0.0, 0.0)
             };
@@ -2235,6 +2264,15 @@ pub fn SourceEditor(props: &SourceEditorProps) -> Html {
             />
             // Canvas
             <div class="tp__source-editor__canvas-wrapper">
+            <aside class="tp__source-editor__guide" role="note">
+                <strong class="tp__source-editor__guide-title">{translate.t("SOURCE_EDITOR.HELP_TITLE")}</strong>
+                <ol>
+                    <li><span>{"1"}</span>{translate.t("SOURCE_EDITOR.HELP_ADD")}</li>
+                    <li><span>{"2"}</span>{translate.t("SOURCE_EDITOR.HELP_CONFIGURE")}</li>
+                    <li><span>{"3"}</span>{translate.t("SOURCE_EDITOR.HELP_CONNECT")}</li>
+                    <li><span>{"4"}</span>{translate.t("SOURCE_EDITOR.HELP_SAVE")}</li>
+                </ol>
+            </aside>
             {
                 if *zoom_indicator_visible {
                     html! {
@@ -2480,6 +2518,35 @@ mod tests {
     #[test]
     fn initial_layout_view_matches_manual_layout_origin() {
         assert_eq!(initial_layout_view_transform(), ((0.0, 0.0), 1.0));
+    }
+
+    #[test]
+    fn sidebar_add_positions_follow_input_target_output_columns() {
+        let state = EditorState::default();
+        let input = next_block_screen_position(&state, 900.0, BlockType::InputM3u);
+        let target = next_block_screen_position(&state, 900.0, BlockType::Target);
+        let output = next_block_screen_position(&state, 900.0, BlockType::OutputM3u);
+
+        assert!(input.0 < target.0);
+        assert!(target.0 < output.0);
+        assert_eq!(input.1, target.1);
+        assert_eq!(target.1, output.1);
+    }
+
+    #[test]
+    fn sidebar_add_positions_do_not_stack_blocks_on_top_of_each_other() {
+        let mut state = EditorState::default();
+        let first = next_block_screen_position(&state, 900.0, BlockType::InputM3u);
+        state.blocks.push(Block {
+            id: 1,
+            block_type: BlockType::InputM3u,
+            position: world_from_screen(first, state.canvas_offset, state.zoom_factor),
+            instance: create_instance(BlockType::InputM3u),
+        });
+
+        let second = next_block_screen_position(&state, 900.0, BlockType::InputM3u);
+        assert_eq!(first.0, second.0);
+        assert!(second.1 > first.1);
     }
 
     #[test]

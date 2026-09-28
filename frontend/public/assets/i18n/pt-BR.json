@@ -1974,7 +1974,12 @@
       "AUDIO": "Áudio",
       "SUBTITLES": "Legendas",
       "AUTO": "Automático",
-      "SUBTITLES_OFF": "Desligadas"
+      "SUBTITLES_OFF": "Desligadas",
+      "EPISODES": "Episódios",
+      "EPISODE_NAVIGATION": "Navegação de episódios",
+      "PREVIOUS_EPISODE": "Anterior",
+      "NEXT_EPISODE": "Próximo episódio",
+      "EPISODE_LOADING": "Carregando episódio..."
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Selecione uma lista de reprodução para visualizar seu conteúdo.",
@@ -2250,6 +2255,7 @@
     }
   },
   "SOURCE_EDITOR": {
+    "ADD_HINT": "Clique para adicionar ao quadro ou arraste para escolher a posição.",
     "BRICK_InputEmby": "Emby",
     "BRICK_InputJellyfin": "Jellyfin",
     "BRICK_InputLibrary": "Biblioteca",
@@ -2262,7 +2268,15 @@
     "BRICK_OutputM3u": "M3u",
     "BRICK_OutputStrm": "STRM",
     "BRICK_OutputXtream": "Xtream",
-    "BRICK_Target": "Destino"
+    "BRICK_Target": "Destino",
+    "HELP_TITLE": "Como montar suas fontes",
+    "HELP_ADD": "Clique em uma opção à esquerda para adicionar um bloco. Entradas ficam à esquerda, destinos no meio e saídas à direita.",
+    "HELP_CONFIGURE": "Dê dois cliques no bloco para preencher ou alterar os dados.",
+    "HELP_CONNECT": "Clique na bolinha da direita e depois na da esquerda para ligar; também pode arrastar de uma para a outra.",
+    "HELP_SAVE": "Use Salvar no alto da página para guardar as alterações.",
+    "CONFIGURE_HINT": "Dê dois cliques para configurar este bloco.",
+    "CONNECT_OUTPUT_HINT": "Início da ligação. Clique aqui e depois na bolinha de entrada do próximo bloco.",
+    "CONNECT_INPUT_HINT": "Final da ligação. Clique aqui depois de escolher uma bolinha de saída."
   },
   "TITLE": {
     "USER_BOUQUET_EDITOR": "Seleção de categoria da lista de reprodução"

@@ -41,21 +41,24 @@ fn create_brick(
     on_drag_start: Callback<DragEvent>,
     on_add_block: Callback<BlockType>,
     label: String,
+    add_hint: String,
 ) -> Html {
     let block_type = *t;
-    let handle_touch_end = Callback::from(move |e: TouchEvent| {
-        e.stop_propagation();
+    let handle_click = Callback::from(move |e: MouseEvent| {
+        e.prevent_default();
         on_add_block.emit(block_type);
     });
 
     html! {
-        <div class={format!("tp__source-editor__brick tp__source-editor__brick-{t}")}
+        <button type="button" class={format!("tp__source-editor__brick tp__source-editor__brick-{t}")}
         draggable={"true"}
         data-block-type={t.to_string()}
         ondragstart={on_drag_start}
-        ontouchend={handle_touch_end}>
+        onclick={handle_click}
+        title={add_hint.clone()}
+        aria-label={format!("{label}. {add_hint}")}>
             { label }
-        </div>
+        </button>
     }
 }
 
@@ -84,6 +87,7 @@ pub struct SourceEditorSidebarProps {
 #[component]
 pub fn SourceEditorSidebar(props: &SourceEditorSidebarProps) -> Html {
     let translate = use_translation();
+    let add_hint = translate.t("SOURCE_EDITOR.ADD_HINT");
 
     html! {
         // Sidebar
@@ -117,17 +121,17 @@ pub fn SourceEditorSidebar(props: &SourceEditorSidebarProps) -> Html {
                         <div class="tp__source-editor__sidebar-bricks">
                             <CollapsePanel title={translate.t("LABEL.INPUTS")}>
                                 <div class="tp__source-editor__sidebar-bricks-group">
-                                    {for BLOCK_TYPES_INPUT.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}"))))}
+                                    {for BLOCK_TYPES_INPUT.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}")), add_hint.clone()))}
                                 </div>
                             </CollapsePanel>
                             <CollapsePanel title={translate.t("LABEL.TARGETS")}>
                                 <div class="tp__source-editor__sidebar-bricks-group">
-                                    {for BLOCK_TYPES_TARGET.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}"))))}
+                                    {for BLOCK_TYPES_TARGET.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}")), add_hint.clone()))}
                                 </div>
                             </CollapsePanel>
                             <CollapsePanel title={translate.t("LABEL.OUTPUT")}>
                                  <div class="tp__source-editor__sidebar-bricks-group">
-                                    {for BLOCK_TYPES_OUTPUT.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}"))))}
+                                    {for BLOCK_TYPES_OUTPUT.iter().map(|t| create_brick(t, props.on_drag_start.clone(), props.on_add_block.clone(), translate.t(&format!("SOURCE_EDITOR.BRICK_{t}")), add_hint.clone()))}
                                  </div>
                             </CollapsePanel>
                         </div>

@@ -64,6 +64,7 @@ struct ChannelSelection {
     url: String,
     title: String,
     input_name: String,
+    series_episodes: Option<Rc<Vec<BrowserPlayerEpisode>>>,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -225,6 +226,16 @@ fn url_indicates_mpeg_ts(url: &str) -> bool {
     [".ts", ".m2ts", ".mts", ".mpegts"].iter().any(|extension| path.ends_with(extension))
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct BrowserPlayerEpisode {
+    virtual_id: u32,
+    title: String,
+    label: String,
+    url: String,
+    season: u32,
+    episode: u32,
+}
+
 #[derive(Properties, PartialEq)]
 struct BrowserPlayerProps {
     title: String,
@@ -232,6 +243,9 @@ struct BrowserPlayerProps {
     is_hls: bool,
     is_mpeg_ts: bool,
     is_live: bool,
+    current_episode_id: Option<u32>,
+    episodes: Vec<BrowserPlayerEpisode>,
+    playlist_request: Option<PlaylistRequest>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
@@ -281,14 +295,27 @@ fn localized_player_track_label(
 #[function_component(BrowserPlayer)]
 fn browser_player(props: &BrowserPlayerProps) -> Html {
     let translate = use_translation();
+    let services = use_service_context();
     let video_ref = use_node_ref();
     let playback_error = use_state(|| false);
     let player_tracks = use_state(BrowserPlayerTracks::default);
     let volume = use_state(|| 1.0_f64);
     let muted = use_state(|| false);
+    let current_title = use_state(|| props.title.clone());
+    let current_src = use_state(|| props.src.clone());
+    let current_is_hls = use_state(|| props.is_hls);
+    let current_is_mpeg_ts = use_state(|| props.is_mpeg_ts);
+    let current_episode_id = use_state(|| props.current_episode_id);
+    let initial_episode_index = props
+        .episodes
+        .iter()
+        .position(|episode| Some(episode.virtual_id) == props.current_episode_id)
+        .unwrap_or_default();
+    let current_episode_index = use_state(|| initial_episode_index);
+    let switching_episode = use_state(|| false);
 
     {
-        let title = props.title.clone();
+        let title = (*current_title).clone();
         use_effect_with(title, move |title| {
             let document = web_sys::window().and_then(|window| window.document());
             let previous_title = document.as_ref().map(web_sys::Document::title);
@@ -308,8 +335,14 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         let video_ref = video_ref.clone();
         let playback_error = playback_error.clone();
         let player_tracks = player_tracks.clone();
-        let dependencies = (props.src.clone(), props.is_hls, props.is_mpeg_ts, props.is_live);
+        let dependencies = (
+            (*current_src).clone(),
+            *current_is_hls,
+            *current_is_mpeg_ts,
+            props.is_live,
+        );
         use_effect_with(dependencies, move |(src, is_hls, is_mpeg_ts, is_live)| {
+            playback_error.set(false);
             player_tracks.set(BrowserPlayerTracks::default());
             let player = video_ref.cast::<HtmlVideoElement>().map(|video| {
                 let playback_error = playback_error.clone();
@@ -343,6 +376,134 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 }
             }
         });
+    }
+
+    let on_select_episode = {
+        let episodes = props.episodes.clone();
+        let playlist_request = props.playlist_request.clone();
+        let services = services.clone();
+        let translate = translate.clone();
+        let current_title = current_title.clone();
+        let current_src = current_src.clone();
+        let current_is_hls = current_is_hls.clone();
+        let current_is_mpeg_ts = current_is_mpeg_ts.clone();
+        let current_episode_id = current_episode_id.clone();
+        let current_episode_index = current_episode_index.clone();
+        let switching_episode = switching_episode.clone();
+        let playback_error = playback_error.clone();
+        let video_ref = video_ref.clone();
+        Callback::from(move |index: usize| {
+            if *switching_episode || index == *current_episode_index {
+                return;
+            }
+            let Some(episode) = episodes.get(index).cloned() else {
+                return;
+            };
+
+            switching_episode.set(true);
+            playback_error.set(false);
+            if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                let _ = video.pause();
+            }
+
+            let services = services.clone();
+            let playlist_request = playlist_request.clone();
+            let translate = translate.clone();
+            let current_title = current_title.clone();
+            let current_src = current_src.clone();
+            let current_is_hls = current_is_hls.clone();
+            let current_is_mpeg_ts = current_is_mpeg_ts.clone();
+            let current_episode_id = current_episode_id.clone();
+            let current_episode_index = current_episode_index.clone();
+            let switching_episode = switching_episode.clone();
+            spawn_local(async move {
+                let resolved_url = match playlist_request.as_ref() {
+                    Some(PlaylistRequest::Target(target_id)) => {
+                        let request = PlaylistUrlResolveRequest::Webplayer {
+                            target_id: *target_id,
+                            virtual_id: episode.virtual_id,
+                            cluster: XtreamCluster::Series,
+                        };
+                        services.playlist.resolve_url(request).await.unwrap_or_default()
+                    }
+                    Some(request) => {
+                        let source_url = if !episode.url.is_empty() {
+                            episode.url.clone()
+                        } else {
+                            services
+                                .playlist
+                                .get_episode(episode.virtual_id, request)
+                                .await
+                                .map_or_else(String::new, |item| item.url.to_string())
+                        };
+                        if source_url.is_empty() {
+                            String::new()
+                        } else {
+                            let resolve_request = PlaylistUrlResolveRequest::Provider {
+                                playlist_request: request.clone(),
+                                url: source_url.clone(),
+                            };
+                            services
+                                .playlist
+                                .resolve_url(resolve_request)
+                                .await
+                                .unwrap_or(source_url)
+                        }
+                    }
+                    None => episode.url.clone(),
+                };
+
+                if resolved_url.is_empty() {
+                    services.toastr.error(translate.t("MESSAGES.PLAYBACK.NO_URL"));
+                    switching_episode.set(false);
+                    return;
+                }
+
+                let is_hls = url_indicates_hls(&episode.url) || url_indicates_hls(&resolved_url);
+                let is_mpeg_ts = !is_hls
+                    && (url_indicates_mpeg_ts(&episode.url) || url_indicates_mpeg_ts(&resolved_url));
+                current_title.set(episode.title);
+                current_src.set(resolved_url);
+                current_is_hls.set(is_hls);
+                current_is_mpeg_ts.set(is_mpeg_ts);
+                current_episode_id.set(Some(episode.virtual_id));
+                current_episode_index.set(index);
+                switching_episode.set(false);
+            });
+        })
+    };
+
+    let previous_episode_index = (*current_episode_index).checked_sub(1);
+    let next_episode_index = (*current_episode_index + 1 < props.episodes.len())
+        .then_some(*current_episode_index + 1);
+    let on_previous_episode = {
+        let on_select_episode = on_select_episode.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(index) = previous_episode_index {
+                on_select_episode.emit(index);
+            }
+        })
+    };
+    let on_next_episode = {
+        let on_select_episode = on_select_episode.clone();
+        Callback::from(move |_: MouseEvent| {
+            if let Some(index) = next_episode_index {
+                on_select_episode.emit(index);
+            }
+        })
+    };
+    let on_video_ended = {
+        let on_select_episode = on_select_episode.clone();
+        Callback::from(move |_: Event| {
+            if let Some(index) = next_episode_index {
+                on_select_episode.emit(index);
+            }
+        })
+    };
+
+    let mut episodes_by_season = BTreeMap::<u32, Vec<(usize, &BrowserPlayerEpisode)>>::new();
+    for (index, episode) in props.episodes.iter().enumerate() {
+        episodes_by_season.entry(episode.season).or_default().push((index, episode));
     }
 
     let on_volume_input = {
@@ -433,18 +594,21 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
 
     html! {
         <div class="tp__browser-player">
-            <h2 class="tp__browser-player__title">{props.title.clone()}</h2>
-            <video
-                class="tp__browser-player__video"
-                ref={video_ref}
-                controls=true
-                autoplay=true
-                playsinline=true
-                preload="metadata"
-                aria-label={props.title.clone()}
-                onvolumechange={on_volume_change}
-            />
-            <div class="tp__browser-player__controls" aria-label={translate.t("MESSAGES.PLAYBACK.CONTROLS")}>
+            <h2 class="tp__browser-player__title">{(*current_title).clone()}</h2>
+            <div class="tp__browser-player__layout">
+              <div class="tp__browser-player__main">
+                <video
+                    class="tp__browser-player__video"
+                    ref={video_ref}
+                    controls=true
+                    autoplay=true
+                    playsinline=true
+                    preload="metadata"
+                    aria-label={(*current_title).clone()}
+                    onvolumechange={on_volume_change}
+                    onended={on_video_ended}
+                />
+                <div class="tp__browser-player__controls" aria-label={translate.t("MESSAGES.PLAYBACK.CONTROLS")}>
                 <div class="tp__browser-player__volume">
                     <label for="tp-player-volume">{translate.t("MESSAGES.PLAYBACK.VOLUME")}</label>
                     <input
@@ -531,13 +695,83 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 } else {
                     Html::default()
                 }}
+                </div>
+                <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
+                {if *playback_error {
+                    html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }
+                } else {
+                    Html::default()
+                }}
+              </div>
+              {if props.episodes.is_empty() {
+                  Html::default()
+              } else {
+                  html! {
+                    <aside class="tp__browser-player__episodes" aria-label={translate.t("MESSAGES.PLAYBACK.EPISODES")}>
+                        <div class="tp__browser-player__episodes-header">
+                            <h3>{translate.t("MESSAGES.PLAYBACK.EPISODES")}</h3>
+                            <span>{props.episodes.len()}</span>
+                        </div>
+                        {if props.episodes.len() > 1 {
+                            html! {
+                                <nav class="tp__browser-player__episode-navigation" aria-label={translate.t("MESSAGES.PLAYBACK.EPISODE_NAVIGATION")}>
+                                    <button
+                                        type="button"
+                                        disabled={previous_episode_index.is_none() || *switching_episode}
+                                        onclick={on_previous_episode.clone()}
+                                    >{translate.t("MESSAGES.PLAYBACK.PREVIOUS_EPISODE")}</button>
+                                    <span>{format!("{} / {}", *current_episode_index + 1, props.episodes.len())}</span>
+                                    <button
+                                        type="button"
+                                        disabled={next_episode_index.is_none() || *switching_episode}
+                                        onclick={on_next_episode.clone()}
+                                    >{translate.t("MESSAGES.PLAYBACK.NEXT_EPISODE")}</button>
+                                </nav>
+                            }
+                        } else {
+                            Html::default()
+                        }}
+                        {if *switching_episode {
+                            html! { <p class="tp__browser-player__episode-status" role="status">{translate.t("MESSAGES.PLAYBACK.EPISODE_LOADING")}</p> }
+                        } else {
+                            Html::default()
+                        }}
+                        <div class="tp__browser-player__episode-list">
+                            {for episodes_by_season.iter().map(|(season, season_episodes)| {
+                                html! {
+                                    <section class="tp__browser-player__episode-season" key={format!("season-{season}")}>
+                                        <h4>{format!("{} - {}", translate.t("LABEL.SEASON"), season)}</h4>
+                                        <div class="tp__browser-player__episode-items">
+                                            {for season_episodes.iter().map(|(index, episode)| {
+                                                let index = *index;
+                                                let select_episode = on_select_episode.clone();
+                                                let on_click = Callback::from(move |_| select_episode.emit(index));
+                                                let is_current = *current_episode_id == Some(episode.virtual_id);
+                                                html! {
+                                                    <button
+                                                        type="button"
+                                                        key={episode.virtual_id.to_string()}
+                                                        class={if is_current { "tp__browser-player__episode is-current" } else { "tp__browser-player__episode" }}
+                                                        aria-current={is_current.to_string()}
+                                                        aria-label={episode.title.clone()}
+                                                        title={episode.title.clone()}
+                                                        disabled={*switching_episode}
+                                                        onclick={on_click}
+                                                    >
+                                                        <span class="tp__browser-player__episode-number">{format!("{:02}·{:02}", episode.season, episode.episode)}</span>
+                                                        <span class="tp__browser-player__episode-label">{episode.label.clone()}</span>
+                                                    </button>
+                                                }
+                                            })}
+                                        </div>
+                                    </section>
+                                }
+                            })}
+                        </div>
+                    </aside>
+                  }
+              }}
             </div>
-            <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
-            {if *playback_error {
-                html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }
-            } else {
-                Html::default()
-            }}
         </div>
     }
 }
@@ -656,6 +890,7 @@ pub fn PlaylistExplorer() -> Html {
                     url: dto.url.to_string(),
                     title: dto.title.to_string(),
                     input_name: dto.input_name.to_string(),
+                    series_episodes: None,
                 }));
                 set_anchor_ref.set(Some(target));
                 set_is_open.set(true);
@@ -806,6 +1041,12 @@ pub fn PlaylistExplorer() -> Html {
                                 let is_hls = url_indicates_hls(&selected.url) || url_indicates_hls(&resolved_url);
                                 let is_mpeg_ts = !is_hls
                                     && (url_indicates_mpeg_ts(&selected.url) || url_indicates_mpeg_ts(&resolved_url));
+                                let episodes = selected
+                                    .series_episodes
+                                    .as_ref()
+                                    .map_or_else(Vec::new, |episodes| episodes.as_ref().clone());
+                                let current_episode_id = (selected.cluster == XtreamCluster::Series)
+                                    .then_some(selected.virtual_id.get());
                                 let content = html! {
                                     <BrowserPlayer
                                         title={selected.title.clone()}
@@ -813,6 +1054,9 @@ pub fn PlaylistExplorer() -> Html {
                                         is_hls={is_hls}
                                         is_mpeg_ts={is_mpeg_ts}
                                         is_live={selected.cluster == XtreamCluster::Live}
+                                        current_episode_id={current_episode_id}
+                                        episodes={episodes}
+                                        playlist_request={playlist_request}
                                     />
                                 };
                                 let _ = dialog.content(content, None, true).await;
@@ -1347,7 +1591,8 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
-    let render_episode = |chan: &SeriesStreamDetailEpisodeProperties| {
+    let render_episode = |chan: &SeriesStreamDetailEpisodeProperties,
+                          series_episodes: Option<Rc<Vec<BrowserPlayerEpisode>>>| {
         let channel_select = ChannelSelection {
             virtual_id: VirtualId::new(chan.id),
             cluster: XtreamCluster::Series,
@@ -1356,6 +1601,7 @@ pub fn PlaylistExplorer() -> Html {
             url: chan.direct_source.to_string(),
             title: chan.title.to_string(),
             input_name: String::new(),
+            series_episodes,
         };
         let popup_onclick = handle_episode_popup_onclick.clone();
         let rating = chan.rating.unwrap_or_default();
@@ -1378,6 +1624,22 @@ pub fn PlaylistExplorer() -> Html {
     };
 
     let render_series_folder = |folder: &Rc<SeriesFolder>| {
+        let player_episodes = Rc::new(
+            folder
+                .seasons
+                .iter()
+                .flat_map(|(season, episodes)| {
+                    episodes.iter().map(|(episode, channel)| BrowserPlayerEpisode {
+                        virtual_id: channel.virtual_id,
+                        title: channel.title.to_string(),
+                        label: series_episode_display_title(&channel.title, &folder.title),
+                        url: channel.url.to_string(),
+                        season: *season,
+                        episode: *episode,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
         let style = if folder.logo.is_empty() {
             String::new()
         } else {
@@ -1397,6 +1659,7 @@ pub fn PlaylistExplorer() -> Html {
                             url: chan.url.to_string(),
                             title: chan.title.to_string(),
                             input_name: chan.input_name.to_string(),
+                            series_episodes: Some(player_episodes.clone()),
                         };
                         let popup_onclick = handle_episode_popup_onclick.clone();
                         let episode_title = series_episode_display_title(&chan.title, &folder.title);
@@ -1570,10 +1833,29 @@ pub fn PlaylistExplorer() -> Html {
             </div>
         };
 
+        let player_episodes = details.and_then(|d| d.episodes.as_ref()).map(|episodes| {
+            let mut player_episodes = episodes
+                .iter()
+                .map(|episode| BrowserPlayerEpisode {
+                    virtual_id: episode.id,
+                    title: episode.title.to_string(),
+                    label: series_episode_display_title(&episode.title, &series_info.title),
+                    url: episode.direct_source.to_string(),
+                    season: episode.season,
+                    episode: episode.episode_num,
+                })
+                .collect::<Vec<_>>();
+            player_episodes.sort_by_key(|episode| (episode.season, episode.episode, episode.virtual_id));
+            Rc::new(player_episodes)
+        });
+
         let episodes_html = if let Some(episodes) = details.as_ref().and_then(|d| d.episodes.as_ref()) {
             let mut grouped: HashMap<u32, Vec<&SeriesStreamDetailEpisodeProperties>> = HashMap::new();
             for item in episodes {
                 grouped.entry(item.season).or_default().push(item);
+            }
+            for season_episodes in grouped.values_mut() {
+                season_episodes.sort_by_key(|episode| (episode.episode_num, episode.id));
             }
             let mut grouped_list: Vec<(u32, Vec<&SeriesStreamDetailEpisodeProperties>)> = grouped.into_iter().collect();
             grouped_list.sort_by_key(|(season, _)| *season);
@@ -1586,7 +1868,7 @@ pub fn PlaylistExplorer() -> Html {
                         </div>
                         <div class={"tp__playlist-explorer__group-list tp__playlist-explorer__group-list-episodes"}>
                             for episode in season_episodes.iter() {
-                                { render_episode(episode) }
+                                { render_episode(episode, player_episodes.clone()) }
                             }
                         </div>
                     </div>
@@ -1709,6 +1991,7 @@ mod tests {
             url: String::new(),
             title: "Live".to_string(),
             input_name: String::new(),
+            series_episodes: None,
         };
         let vod = ChannelSelection {
             virtual_id: VirtualId::default(),
@@ -1717,6 +2000,7 @@ mod tests {
             url: String::new(),
             title: "VOD".to_string(),
             input_name: String::new(),
+            series_episodes: None,
         };
         let series_container = ChannelSelection {
             virtual_id: VirtualId::default(),
@@ -1725,6 +2009,7 @@ mod tests {
             url: String::new(),
             title: "Series".to_string(),
             input_name: String::new(),
+            series_episodes: None,
         };
         let episode = ChannelSelection {
             virtual_id: VirtualId::default(),
@@ -1733,6 +2018,7 @@ mod tests {
             url: String::new(),
             title: "Episode".to_string(),
             input_name: String::new(),
+            series_episodes: None,
         };
 
         assert!(!can_show_record_action(false, Some(&live)));

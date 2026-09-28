@@ -1941,7 +1941,12 @@
       "AUDIO": "الصوت",
       "SUBTITLES": "الترجمة",
       "AUTO": "تلقائي",
-      "SUBTITLES_OFF": "إيقاف"
+      "SUBTITLES_OFF": "إيقاف",
+      "EPISODES": "الحلقات",
+      "EPISODE_NAVIGATION": "التنقل بين الحلقات",
+      "PREVIOUS_EPISODE": "الحلقة السابقة",
+      "NEXT_EPISODE": "الحلقة التالية",
+      "EPISODE_LOADING": "جارٍ تحميل الحلقة..."
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "حدد قائمة تشغيل لعرض محتواها.",
@@ -2217,6 +2222,7 @@
     }
   },
   "SOURCE_EDITOR": {
+    "ADD_HINT": "انقر لإضافة الكتلة إلى اللوحة، أو اسحبها لاختيار موضعها.",
     "BRICK_InputEmby": "Emby",
     "BRICK_InputJellyfin": "Jellyfin",
     "BRICK_InputLibrary": "مكتبة",
@@ -2228,7 +2234,15 @@
     "BRICK_OutputM3u": "M3u",
     "BRICK_OutputStrm": "STRM",
     "BRICK_OutputXtream": "Xtream",
-    "BRICK_Target": "هدف"
+    "BRICK_Target": "هدف",
+    "HELP_TITLE": "كيفية إعداد المصادر",
+    "HELP_ADD": "انقر على خيار يسار الشاشة لإضافة كتلة. ضع المدخلات يسارًا والوجهات في الوسط والمخرجات يمينًا.",
+    "HELP_CONFIGURE": "انقر نقرًا مزدوجًا على الكتلة لإدخال البيانات أو تعديلها.",
+    "HELP_CONNECT": "انقر على النقطة اليمنى ثم النقطة اليسرى للربط، أو اسحب بينهما.",
+    "HELP_SAVE": "استخدم زر الحفظ أعلى الصفحة للاحتفاظ بالتغييرات.",
+    "CONFIGURE_HINT": "انقر نقرًا مزدوجًا لإعداد هذه الكتلة.",
+    "CONNECT_OUTPUT_HINT": "بداية الاتصال. انقر هنا ثم اختر نقطة إدخال في الكتلة التالية.",
+    "CONNECT_INPUT_HINT": "نهاية الاتصال. انقر هنا بعد اختيار نقطة إخراج."
   },
   "TITLE": {
     "USER_BOUQUET_EDITOR": "اختيار فئة قائمة التشغيل"
