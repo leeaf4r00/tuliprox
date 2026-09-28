@@ -11,7 +11,7 @@
 FROM mwader/static-ffmpeg:7.1 AS ffmpeg-static
 
 # Workspace skeleton shared by the backend and frontend dependency builds.
-FROM rust:1.95 AS workspace-skeleton
+FROM rust:1.96 AS workspace-skeleton
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -101,7 +101,7 @@ COPY frontend ./frontend/
 WORKDIR /src/frontend
 
 # Run Trunk build
-RUN find src -type f -name '*.rs' -exec touch {} + && trunk build --release
+RUN --network=host find src -type f -name '*.rs' -exec touch {} + && trunk build --release
 
 # -----------------------------------------------------------------
 # Stage 3: Build video resources with ffmpeg (from linuxserver used for build time only)
@@ -151,7 +151,7 @@ RUN set -eu; \
 # -----------------------------------------------------------------
 # Stage 4: Prepare timezone data
 # -----------------------------------------------------------------
-FROM alpine:latest AS tz-prep
+FROM alpine:latest@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS tz-prep
 
 ARG TZ=UTC
 ENV TZ=${TZ}

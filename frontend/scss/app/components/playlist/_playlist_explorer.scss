@@ -419,3 +419,53 @@ $series-backdrop-mobile-height: 150px;
     }
   }
 }
+
+.tp__browser-player {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-default);
+  width: min(72vw, 72rem);
+  max-width: 100%;
+
+  &__title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    overflow-wrap: anywhere;
+  }
+
+  &__video {
+    display: block;
+    width: 100%;
+    max-height: 70vh;
+    aspect-ratio: 16 / 9;
+    background: var(--background-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    object-fit: contain;
+  }
+
+  &__hint,
+  &__error {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  &__hint {
+    color: var(--modest-text-color);
+  }
+
+  &__error {
+    padding: var(--padding-small);
+    color: var(--error-color);
+    background: var(--error-background-color);
+    border-radius: var(--border-radius);
+  }
+
+  @media (max-width: size.$mobile-breakpoint) {
+    width: min(82vw, 48rem);
+
+    &__video {
+      max-height: 55vh;
+    }
+  }
+}

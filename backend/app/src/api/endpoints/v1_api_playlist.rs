@@ -62,7 +62,10 @@ use shared::{
         PlaylistUpdateStatusDto, PlaylistUrlResolveRequest, ProxyType, TargetType, UiPlaylistItem, VirtualId,
         XtreamCluster,
     },
-    utils::{concat_path_leading_slash, open_web_ui_resource_url, sanitize_sensitive_info, Internable},
+    utils::{
+        concat_path_leading_slash, extract_extension_from_url, open_web_ui_resource_url, sanitize_sensitive_info,
+        Internable,
+    },
 };
 use std::{path::Path, str::FromStr, sync::Arc};
 use tokio_stream::StreamExt;
@@ -923,10 +926,17 @@ async fn playlist_webplayer_stream(
         format!("Can't find input {} for target {}", pli.input_name, target.name)
     );
     let user = Arc::new(create_api_proxy_user(&app_state));
-
-    m3u_api_stream_loaded(user, target, &fingerprint, &req_headers, &app_state, pli, input, None, None)
+    let download_title = pli.title.to_string();
+    let download_extension = extract_extension_from_url(&pli.url).map(str::to_owned);
+    let mut response = m3u_api_stream_loaded(user, target, &fingerprint, &req_headers, &app_state, pli, input, None, None)
         .await
-        .into_response()
+        .into_response();
+    crate::api::api_utils::set_inline_download_filename(
+        &mut response,
+        &download_title,
+        download_extension.as_deref(),
+    );
+    response
 }
 
 #[derive(Debug, Deserialize)]

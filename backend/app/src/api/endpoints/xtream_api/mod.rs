@@ -928,10 +928,13 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
         }
 
         let user = create_api_proxy_user(app_state);
+        let has_access_token = stream_req.access_token;
+        let download_title = pli.title.to_string();
 
         if pli.item_type.is_local() {
+            let download_extension = extract_extension_from_url(&pli.url).map(str::to_owned);
             let playback_session_token = create_session_fingerprint(fingerprint, "webui", virtual_id.get(), false);
-            return local_stream_response(
+            let mut response = local_stream_response(
                 fingerprint,
                 app_state,
                 pli.to_stream_channel(target.id),
@@ -947,6 +950,14 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
             )
             .await
             .into_response();
+            if has_access_token {
+                api_utils::set_inline_download_filename(
+                    &mut response,
+                    &download_title,
+                    download_extension.as_deref(),
+                );
+            }
+            return response;
         }
 
         let resolution_item_type =
@@ -983,12 +994,13 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
 
         // Reverse proxy mode — only route genuine HLS into the HLS handler, not DASH
         if is_session_request && playback_ext == Some(shared::defaults::HLS_EXT) {
+            let download_extension = extract_extension_from_url(&pli.url).map(str::to_owned);
             let Some(stream_context) = HlsEntryStreamContext::from_playlist_item(&pli) else {
                 error!("HLS input stream identity missing for virtual_id={virtual_id}; refresh target playlist");
                 return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
             };
             let original_hls_entry_path = build_virtual_hls_entry_path(&target, &input, &user, virtual_id.get());
-            return handle_hls_stream_request(
+            let mut response = handle_hls_stream_request(
                 fingerprint,
                 app_state,
                 &user,
@@ -1006,6 +1018,14 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
             )
             .await
             .into_response();
+            if has_access_token {
+                api_utils::set_inline_download_filename(
+                    &mut response,
+                    &download_title,
+                    download_extension.as_deref(),
+                );
+            }
+            return response;
         }
 
         let stream_url = try_option_bad_request!(
@@ -1018,7 +1038,8 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
         );
 
         trace_if_enabled!("Streaming stream request from {}", sanitize_sensitive_info(&stream_url));
-        stream_response(
+        let download_extension = extract_extension_from_url(&pli.url).map(str::to_owned);
+        let mut response = stream_response(
             fingerprint,
             app_state,
             session_key.as_str(),
@@ -1036,7 +1057,11 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
             None,
         )
         .await
-        .into_response()
+        .into_response();
+        if has_access_token {
+            api_utils::set_inline_download_filename(&mut response, &download_title, download_extension.as_deref());
+        }
+        response
     }
 }
 

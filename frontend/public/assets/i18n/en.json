@@ -1366,6 +1366,7 @@
     "PERIOD_MILLIS": "Period Millis",
     "PERSIST": "Persist",
     "PLAYER_SERVER": "Player Server",
+    "PLAY_IN_BROWSER": "Play in browser",
     "PLAN": "Plan",
     "PLANS": "Plans",
     "PLAN_DETAILS": "Plan Details",
@@ -1960,6 +1961,11 @@
     },
     "PLAYLIST": {
       "WEBPLAYER_URL_COPY_TO_CLIPBOARD": "The copied WebPlayer url is valid for 30 seconds."
+    },
+    "PLAYBACK": {
+      "BROWSER_HINT": "Use the video controls to start playback. HLS and MPEG-TS are supported; seeking in .ts files may be limited.",
+      "ERROR": "The browser could not play this video. Its format may be unsupported or the provider may have blocked the stream.",
+      "NO_URL": "Could not get a playable stream URL for this item."
     },
     "PLAYLIST_EXPLORER": {
       "SELECT_A_PLAYLIST_TO_VIEW_CONTENT": "Select a playlist to view its content.",

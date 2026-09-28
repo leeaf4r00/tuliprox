@@ -112,6 +112,53 @@ pub(crate) fn resolve_request_url_for_logging<'a>(input: &ConfigInput, stream_ur
         .unwrap_or(Cow::Borrowed(stream_url))
 }
 
+/// Gives internal player streams a useful filename when a browser download manager captures them.
+/// `inline` keeps the response playable in the browser; the filename parameters are still honored
+/// by download managers such as IDM.
+pub(crate) fn set_inline_download_filename(
+    response: &mut axum::response::Response,
+    title: &str,
+    extension: Option<&str>,
+) {
+    let extension = extension
+        .filter(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .unwrap_or("mp4");
+    let title = title.trim();
+    let mut fallback = title
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.' | '(' | ')' | '[' | ']') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while fallback.contains("..") {
+        fallback = fallback.replace("..", ".");
+    }
+    let fallback = fallback.trim_matches([' ', '.']);
+    let fallback = if fallback.is_empty() { "video" } else { fallback };
+    let filename = format!("{title}.{extension}");
+    let fallback_filename = format!("{fallback}.{extension}");
+    let encoded_filename = filename
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect::<String>();
+    let value = format!(
+        "inline; filename=\"{fallback_filename}\"; filename*=UTF-8''{encoded_filename}"
+    );
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
+    }
+}
+
 pub(crate) struct ConnectFailedAttempt<'a> {
     pub app_state: &'a Arc<AppState>,
     pub fingerprint: &'a Fingerprint,

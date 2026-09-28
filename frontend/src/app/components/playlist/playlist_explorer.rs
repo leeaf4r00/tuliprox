@@ -23,10 +23,26 @@ use shared::{
     },
     utils::{format_float_localized, Internable},
 };
-use std::{cell::RefCell, collections::HashMap, rc::Rc, str::FromStr};
-use wasm_bindgen::JsCast;
-use web_sys::HtmlInputElement;
+use std::{cell::RefCell, collections::{BTreeMap, HashMap}, rc::Rc, str::FromStr};
+use wasm_bindgen::{closure::Closure, JsCast};
+use web_sys::{HtmlInputElement, HtmlVideoElement};
 use yew::{platform::spawn_local, prelude::*};
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = attachTuliproxVideo)]
+    fn attach_tuliprox_video(
+        video: &HtmlVideoElement,
+        url: &str,
+        is_hls: bool,
+        is_mpeg_ts: bool,
+        is_live: bool,
+        on_error: &js_sys::Function,
+    ) -> wasm_bindgen::JsValue;
+
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = window, js_name = detachTuliproxVideo)]
+    fn detach_tuliprox_video(handle: &wasm_bindgen::JsValue, video: &HtmlVideoElement);
+}
 
 const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
 
@@ -44,6 +60,7 @@ struct ChannelSelection {
 #[derive(Debug, Clone, Eq, PartialEq, strum_macros::Display, strum_macros::EnumString)]
 #[strum(serialize_all = "snake_case")]
 enum ExplorerAction {
+    PlayInBrowser,
     CopyLinkTuliproxVirtualId,
     CopyLinkTuliproxWebPlayerUrl,
     CopyLinkProviderUrl,
@@ -102,9 +119,188 @@ fn can_show_record_action(can_write_recordings: bool, selected_channel: Option<&
     can_write_recordings && selected_channel.is_some_and(|item| item.cluster == XtreamCluster::Live)
 }
 
+fn can_show_play_action(selected_channel: Option<&ChannelSelection>) -> bool {
+    selected_channel.is_some_and(|item| {
+        matches!(item.cluster, XtreamCluster::Live | XtreamCluster::Video | XtreamCluster::Series)
+    })
+}
+
+#[derive(Clone)]
+struct SeriesFolder {
+    title: String,
+    logo: String,
+    seasons: BTreeMap<u32, Vec<(u32, Rc<UiPlaylistItem>)>>,
+}
+
+enum SeriesExplorerEntry {
+    Folder(SeriesFolder),
+    Item(Rc<UiPlaylistItem>),
+}
+
+fn parse_series_episode_title(title: &str) -> Option<(String, u32, u32)> {
+    let pattern = &shared::utils::CONSTANTS.re_episode_code;
+    let matched = pattern.captures(title)?.get(0)?;
+    let (season, episode) = shared::utils::parse_season_episode(title, pattern)?;
+    let series_title = title
+        .get(..matched.start())?
+        .trim_end_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '-' | '_' | '.' | ':' | '|')
+        })
+        .trim();
+
+    (!series_title.is_empty()).then(|| (series_title.to_string(), season, episode))
+}
+
+fn build_series_entries(channels: &[Rc<UiPlaylistItem>]) -> Vec<SeriesExplorerEntry> {
+    let mut entries = Vec::new();
+    let mut folders = HashMap::<String, usize>::new();
+
+    for channel in channels {
+        let Some((title, season, episode)) = parse_series_episode_title(&channel.title) else {
+            entries.push(SeriesExplorerEntry::Item(channel.clone()));
+            continue;
+        };
+
+        let key = title.to_lowercase();
+        let index = if let Some(index) = folders.get(&key) {
+            *index
+        } else {
+            let index = entries.len();
+            entries.push(SeriesExplorerEntry::Folder(SeriesFolder {
+                title,
+                logo: channel.logo.to_string(),
+                seasons: BTreeMap::new(),
+            }));
+            folders.insert(key, index);
+            index
+        };
+
+        if let SeriesExplorerEntry::Folder(folder) = &mut entries[index] {
+            if folder.logo.is_empty() && !channel.logo.is_empty() {
+                folder.logo = channel.logo.to_string();
+            }
+            folder.seasons.entry(season).or_default().push((episode, channel.clone()));
+        }
+    }
+
+    for entry in &mut entries {
+        if let SeriesExplorerEntry::Folder(folder) = entry {
+            for episodes in folder.seasons.values_mut() {
+                episodes.sort_by(|(left_number, left), (right_number, right)| {
+                    left_number.cmp(right_number).then_with(|| left.title.cmp(&right.title))
+                });
+            }
+        }
+    }
+
+    entries
+}
+
+fn series_episode_display_title(title: &str, series_title: &str) -> String {
+    title
+        .strip_prefix(series_title)
+        .map(|episode| episode.trim_start_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '-' | '_' | '.' | ':' | '|')
+        }))
+        .filter(|episode| !episode.is_empty())
+        .unwrap_or(title)
+        .to_string()
+}
+
+fn url_indicates_hls(url: &str) -> bool { url.to_ascii_lowercase().contains(".m3u8") }
+
+fn url_indicates_mpeg_ts(url: &str) -> bool {
+    let path = url.split(|character| character == '?' || character == '#').next().unwrap_or(url);
+    let path = path.to_ascii_lowercase();
+    [".ts", ".m2ts", ".mts", ".mpegts"].iter().any(|extension| path.ends_with(extension))
+}
+
+#[derive(Properties, PartialEq)]
+struct BrowserPlayerProps {
+    title: String,
+    src: String,
+    is_hls: bool,
+    is_mpeg_ts: bool,
+    is_live: bool,
+}
+
+#[function_component(BrowserPlayer)]
+fn browser_player(props: &BrowserPlayerProps) -> Html {
+    let translate = use_translation();
+    let video_ref = use_node_ref();
+    let playback_error = use_state(|| false);
+
+    {
+        let title = props.title.clone();
+        use_effect_with(title, move |title| {
+            let document = web_sys::window().and_then(|window| window.document());
+            let previous_title = document.as_ref().map(web_sys::Document::title);
+            if let Some(document) = document.as_ref() {
+                document.set_title(title);
+            }
+
+            move || {
+                if let (Some(document), Some(previous_title)) = (document.as_ref(), previous_title.as_deref()) {
+                    document.set_title(previous_title);
+                }
+            }
+        });
+    }
+
+    {
+        let video_ref = video_ref.clone();
+        let playback_error = playback_error.clone();
+        let dependencies = (props.src.clone(), props.is_hls, props.is_mpeg_ts, props.is_live);
+        use_effect_with(dependencies, move |(src, is_hls, is_mpeg_ts, is_live)| {
+            let player = video_ref.cast::<HtmlVideoElement>().map(|video| {
+                let playback_error = playback_error.clone();
+                let on_error = Closure::<dyn FnMut()>::new(move || playback_error.set(true));
+                let player_handle = attach_tuliprox_video(
+                    &video,
+                    src,
+                    *is_hls,
+                    *is_mpeg_ts,
+                    *is_live,
+                    on_error.as_ref().unchecked_ref(),
+                );
+                (video, player_handle, on_error)
+            });
+
+            move || {
+                if let Some((video, player_handle, on_error)) = player {
+                    detach_tuliprox_video(&player_handle, &video);
+                    drop(on_error);
+                }
+            }
+        });
+    }
+
+    html! {
+        <div class="tp__browser-player">
+            <h2 class="tp__browser-player__title">{props.title.clone()}</h2>
+            <video
+                class="tp__browser-player__video"
+                ref={video_ref}
+                controls=true
+                autoplay=true
+                playsinline=true
+                preload="metadata"
+                aria-label={props.title.clone()}
+            />
+            <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
+            {if *playback_error {
+                html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }
+            } else {
+                Html::default()
+            }}
+        </div>
+    }
+}
+
 enum ExplorerLevel {
     Categories,
     Group(Rc<UiPlaylistGroup>),
+    SeriesFolder(Rc<UiPlaylistGroup>, Rc<SeriesFolder>),
     SeriesInfo(Rc<UiPlaylistGroup>, Rc<UiPlaylistItem>, Option<Box<SeriesStreamProperties>>),
 }
 
@@ -309,6 +505,75 @@ pub fn PlaylistExplorer() -> Html {
         Callback::from(move |(name, _): (String, _)| {
             if let Ok(action) = ExplorerAction::from_str(&name) {
                 match action {
+                    ExplorerAction::PlayInBrowser => {
+                        if let Some(dto) = &*selected_channel {
+                            let dialog = dialog.clone();
+                            let services = services.clone();
+                            let translate_clone = translate_clone.clone();
+                            let playlist_request = (*playlist_ctx.playlist_request).clone();
+                            let selected = dto.clone();
+
+                            spawn_local(async move {
+                                let resolved_url = match playlist_request.as_ref() {
+                                    Some(PlaylistRequest::Target(target_id)) => {
+                                        let request = PlaylistUrlResolveRequest::Webplayer {
+                                            target_id: *target_id,
+                                            virtual_id: selected.virtual_id.get(),
+                                            cluster: selected.cluster,
+                                        };
+                                        services.playlist.resolve_url(request).await.unwrap_or_default()
+                                    }
+                                    Some(request) => {
+                                        let source_url = if !selected.url.is_empty() {
+                                            selected.url.clone()
+                                        } else if selected.cluster == XtreamCluster::Series {
+                                            services
+                                                .playlist
+                                                .get_episode(selected.virtual_id.get(), request)
+                                                .await
+                                                .map_or_else(String::new, |episode| episode.url.to_string())
+                                        } else {
+                                            String::new()
+                                        };
+
+                                        if source_url.is_empty() {
+                                            String::new()
+                                        } else {
+                                            let resolve_request = PlaylistUrlResolveRequest::Provider {
+                                                playlist_request: request.clone(),
+                                                url: source_url.clone(),
+                                            };
+                                            services
+                                                .playlist
+                                                .resolve_url(resolve_request)
+                                                .await
+                                                .unwrap_or(source_url)
+                                        }
+                                    }
+                                    None => selected.url.clone(),
+                                };
+
+                                if resolved_url.is_empty() {
+                                    services.toastr.error(translate_clone.t("MESSAGES.PLAYBACK.NO_URL"));
+                                    return;
+                                }
+
+                                let is_hls = url_indicates_hls(&selected.url) || url_indicates_hls(&resolved_url);
+                                let is_mpeg_ts = !is_hls
+                                    && (url_indicates_mpeg_ts(&selected.url) || url_indicates_mpeg_ts(&resolved_url));
+                                let content = html! {
+                                    <BrowserPlayer
+                                        title={selected.title.clone()}
+                                        src={resolved_url}
+                                        is_hls={is_hls}
+                                        is_mpeg_ts={is_mpeg_ts}
+                                        is_live={selected.cluster == XtreamCluster::Live}
+                                    />
+                                };
+                                let _ = dialog.content(content, None, true).await;
+                            });
+                        }
+                    }
                     ExplorerAction::CopyLinkTuliproxVirtualId => {
                         if let Some(dto) = &*selected_channel {
                             copy_to_clipboard.emit(dto.virtual_id.to_string());
@@ -655,6 +920,9 @@ pub fn PlaylistExplorer() -> Html {
             ExplorerLevel::Group(_) => {
                 current_item.set(ExplorerLevel::Categories);
             }
+            ExplorerLevel::SeriesFolder(ref group, _) => {
+                current_item.set(ExplorerLevel::Group(group.clone()));
+            }
             ExplorerLevel::SeriesInfo(ref group, _, _) => {
                 current_item.set(ExplorerLevel::Group(group.clone()));
             }
@@ -864,6 +1132,80 @@ pub fn PlaylistExplorer() -> Html {
         }
     };
 
+    let render_series_folder = |folder: &Rc<SeriesFolder>| {
+        let style = if folder.logo.is_empty() {
+            String::new()
+        } else {
+            format!("background-image: url(\"{}\");", folder.logo)
+        };
+        let seasons_html = folder
+            .seasons
+            .iter()
+            .map(|(season, episodes)| {
+                let episodes_html = episodes
+                    .iter()
+                    .map(|(episode_number, chan)| {
+                        let selected = ChannelSelection {
+                            virtual_id: VirtualId::new(chan.virtual_id),
+                            cluster: XtreamCluster::Series,
+                            downloadable: true,
+                            url: chan.url.to_string(),
+                            title: chan.title.to_string(),
+                            input_name: chan.input_name.to_string(),
+                        };
+                        let popup_onclick = handle_episode_popup_onclick.clone();
+                        let episode_title = series_episode_display_title(&chan.title, &folder.title);
+                        let episode_key = format!("episode-{}-{episode_number}", chan.virtual_id);
+                        html! {
+                            <span key={episode_key} class="tp__playlist-explorer__channel tp__playlist-explorer__channel-episode">
+                                {render_channel_logo(&chan.logo, &chan.title)}
+                                {
+                                    html_if!(chan.rating > 0.001, {
+                                        <Chip class="tp__playlist-explorer__channel-episode-rating" label={format_float_localized(chan.rating, 1, false)} />
+                                    })
+                                }
+                                <span class="tp__playlist-explorer__channel-episode-info">
+                                    <button class="tp__icon-button" onclick={Callback::from(move |event: MouseEvent| popup_onclick.emit((selected.clone(), event)))}>
+                                        <AppIcon name="Popup"></AppIcon>
+                                    </button>
+                                    <span class="tp__playlist-explorer__channel-episode-title">{episode_title}</span>
+                                </span>
+                            </span>
+                        }
+                    })
+                    .collect::<Html>();
+                html! {
+                    <div key={format!("season-{season}")}>
+                        <div class="tp__playlist-explorer__series-info__season">
+                            <span class="tp__playlist-explorer__series-info__season-title">
+                                {translate.t("LABEL.SEASON")}{" - "}{season}
+                            </span>
+                        </div>
+                        <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-episodes">
+                            {episodes_html}
+                        </div>
+                    </div>
+                }
+            })
+            .collect::<Html>();
+
+        html! {
+            <div class="tp__playlist-explorer__series-info">
+                <div class="tp__playlist-explorer__series-info__header">
+                    <div class="tp__playlist-explorer__series-info__body-top" style={style}>
+                        <div class="tp__playlist-explorer__series-info__body-top-backdrop"></div>
+                        <div class="tp__playlist-explorer__series-info__body-top-content">
+                            <span class="tp__playlist-explorer__series-info__title">{folder.title.clone()}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="tp__playlist-explorer__series-info__body">
+                    {seasons_html}
+                </div>
+            </div>
+        }
+    };
+
     let render_channel = |chan: &Rc<UiPlaylistItem>| match chan.xtream_cluster {
         XtreamCluster::Live => render_live(chan),
         XtreamCluster::Video => render_movie(chan),
@@ -871,6 +1213,44 @@ pub fn PlaylistExplorer() -> Html {
     };
 
     let render_group = |group: &Rc<UiPlaylistGroup>| {
+        let channels = if group.xtream_cluster == XtreamCluster::Series {
+            build_series_entries(&group.channels)
+                .into_iter()
+                .map(|entry| match entry {
+                    SeriesExplorerEntry::Item(channel) => render_series(&channel),
+                    SeriesExplorerEntry::Folder(folder) => {
+                        let folder = Rc::new(folder);
+                        let folder_title = folder.title.clone();
+                        let folder_logo = folder.logo.clone();
+                        let group_for_click = group.clone();
+                        let folder_for_click = folder.clone();
+                        let on_click = {
+                            let current_item = current_item.clone();
+                            Callback::from(move |event: MouseEvent| {
+                                event.prevent_default();
+                                event.stop_propagation();
+                                current_item.set(ExplorerLevel::SeriesFolder(
+                                    group_for_click.clone(),
+                                    folder_for_click.clone(),
+                                ));
+                            })
+                        };
+
+                        html! {
+                            <span key={format!("series-folder-{}", folder_title)} onclick={on_click} class="tp__playlist-explorer__channel tp__playlist-explorer__channel-series">
+                                {render_channel_logo(&folder_logo, &folder_title)}
+                                <span class="tp__playlist-explorer__channel-series-info">
+                                    <span class="tp__playlist-explorer__channel-series-title">{folder_title}</span>
+                                </span>
+                            </span>
+                        }
+                    }
+                })
+                .collect::<Html>()
+        } else {
+            group.channels.iter().map(render_channel).collect::<Html>()
+        };
+
         html! {
             <div class="tp__playlist-explorer__group">
               <div class={format!("tp__playlist-explorer__group-list tp__playlist-explorer__group-list-{}", group.xtream_cluster.to_string().to_lowercase())}>
@@ -878,7 +1258,7 @@ pub fn PlaylistExplorer() -> Html {
                   if group.channels.is_empty() {
                       html! { <NoContent text={translate.t("LABEL.NO_CONTENT")} /> }
                   } else {
-                      group.channels.iter().map(render_channel).collect::<Html>()
+                      channels
                   }
               }
               </div>
@@ -993,6 +1373,7 @@ pub fn PlaylistExplorer() -> Html {
                     match *current_item {
                         ExplorerLevel::Categories => html!{} ,
                         ExplorerLevel::Group(ref group) => html!{ <span>{group.title.to_string()}</span> },
+                        ExplorerLevel::SeriesFolder(_, ref folder) => html!{ <span>{folder.title.clone()}</span> },
                         ExplorerLevel::SeriesInfo(_, ref pli, _) => html!{ <span>{pli.title.to_string()}</span> },
                     }
                   }
@@ -1007,6 +1388,7 @@ pub fn PlaylistExplorer() -> Html {
             match *current_item {
                 ExplorerLevel::Categories => html!{render_categories()} ,
                 ExplorerLevel::Group(ref group) => html!{ render_group(group) },
+                ExplorerLevel::SeriesFolder(_, ref folder) => html!{ render_series_folder(folder) },
                 ExplorerLevel::SeriesInfo(_, ref pli, ref props) => html!{ render_series_info(pli, props.as_ref()) },
             }
           }
@@ -1020,6 +1402,9 @@ pub fn PlaylistExplorer() -> Html {
                 </>
              })
             }
+            { html_if!(can_show_play_action(selected_channel.as_ref()), {
+                <MenuItem icon="PlayArrow" name={ExplorerAction::PlayInBrowser.to_string()} label={translate.t("LABEL.PLAY_IN_BROWSER")} onclick={&handle_menu_click}></MenuItem>
+            })}
             <MenuItem icon="Clipboard" name={ExplorerAction::CopyLinkProviderUrl.to_string()} label={translate.t("LABEL.COPY_LINK_PROVIDER_URL")} onclick={&handle_menu_click}></MenuItem>
             { html_if!(
                 can_show_record_action(can_write_recordings, selected_channel.as_ref()),
