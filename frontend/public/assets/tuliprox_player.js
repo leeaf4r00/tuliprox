@@ -3,9 +3,16 @@
 
   // #region debug
   const DEBUG_SESSION_ID = "player-stalls-918e5d";
-  const DEBUG_LOG_URL = "http://127.0.0.1:8787/log";
+
+  // Set both globals before attaching the player to opt in to diagnostics.
+  function playerDiagnosticsEnabled() {
+    return window.TULIPROX_PLAYER_DEBUG === true &&
+      typeof window.TULIPROX_PLAYER_DEBUG_URL === "string" &&
+      window.TULIPROX_PLAYER_DEBUG_URL.trim() !== "";
+  }
 
   function playerDebugLog(msg, data) {
+    if (!playerDiagnosticsEnabled()) return;
     try {
       const body = JSON.stringify({
         sessionId: DEBUG_SESSION_ID,
@@ -13,8 +20,9 @@
         data: data || {},
         hypothesisId: "H1,H2,H3,H4"
       });
-      if (navigator.sendBeacon && navigator.sendBeacon(DEBUG_LOG_URL, body)) return;
-      fetch(DEBUG_LOG_URL, { method: "POST", body: body, keepalive: true }).catch(function () {});
+      const logUrl = window.TULIPROX_PLAYER_DEBUG_URL;
+      if (navigator.sendBeacon && navigator.sendBeacon(logUrl, body)) return;
+      fetch(logUrl, { method: "POST", body: body, keepalive: true }).catch(function () {});
     } catch (_) {}
   }
 
@@ -42,6 +50,8 @@
   }
 
   function attachMediaDiagnostics(video, streamType) {
+    if (!playerDiagnosticsEnabled()) return {};
+
     let waitingStartedAt = null;
     let lastSampleAt = 0;
     const handlers = {};
@@ -345,7 +355,7 @@
 
       const mpegtsPlayer = window.mpegts.createPlayer({
         type: "mpegts",
-        isLive: false,
+        isLive: Boolean(isLive),
         url: url
       });
       nativeMpegTsFallbackPlayer = mpegtsPlayer;
@@ -381,7 +391,7 @@
     const nativeErrorHandler = function () {
       const errorCode = video.error ? video.error.code : null;
       if (nativeMpegTsFallbackPlayer) return;
-      if (errorCode === 4 && !isLive && !nativeMpegTsFallbackAttempted) {
+      if (errorCode === 4 && !nativeMpegTsFallbackAttempted) {
         nativeMpegTsFallbackAttempted = true;
         video.removeEventListener("error", nativeErrorHandler);
         if (startNativeMpegTsFallback()) return;
