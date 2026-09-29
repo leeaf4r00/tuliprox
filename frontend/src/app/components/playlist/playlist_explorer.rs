@@ -225,8 +225,8 @@ enum SeriesExplorerEntry {
 
 fn parse_series_episode_title(title: &str) -> Option<(String, u32, u32)> {
     let pattern = &shared::utils::CONSTANTS.re_episode_code;
-    let matched = pattern.captures(title)?.get(0)?;
-    let (season, episode) = shared::utils::parse_season_episode(title, pattern)?;
+    let matched = pattern.find_iter(title).last()?;
+    let (season, episode) = shared::utils::parse_season_episode(&title[matched.start()..], pattern)?;
     let series_title = title
         .get(..matched.start())?
         .trim_end_matches(|character: char| {
@@ -2682,9 +2682,18 @@ pub fn PlaylistExplorer() -> Html {
 mod tests {
     use super::{
         build_download_filename, can_show_download_action, can_show_record_action, normalize_input_name,
-        parse_optional_priority_input, ChannelSelection,
+        parse_optional_priority_input, parse_series_episode_title, ChannelSelection,
     };
     use shared::model::{VirtualId, XtreamCluster};
+
+    #[test]
+    fn episode_title_uses_last_code_to_preserve_series_name() {
+        assert_eq!(
+            parse_series_episode_title("Arquivo S01E01 - S02E03"),
+            Some(("Arquivo S01E01".to_string(), 2, 3))
+        );
+        assert_eq!(parse_series_episode_title("Série S01E04"), Some(("Série".to_string(), 1, 4)));
+    }
 
     #[test]
     fn parse_optional_priority_input_treats_blank_as_none() {
