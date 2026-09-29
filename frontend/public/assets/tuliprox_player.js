@@ -391,7 +391,7 @@
     const nativeErrorHandler = function () {
       const errorCode = video.error ? video.error.code : null;
       if (nativeMpegTsFallbackPlayer) return;
-      if (errorCode === 4 && !nativeMpegTsFallbackAttempted) {
+      if (errorCode === 4 && !isHls && !nativeMpegTsFallbackAttempted) {
         nativeMpegTsFallbackAttempted = true;
         video.removeEventListener("error", nativeErrorHandler);
         if (startNativeMpegTsFallback()) return;

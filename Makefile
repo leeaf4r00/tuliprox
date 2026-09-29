@@ -170,6 +170,11 @@ cargo-machete-check: ## Detect unused dependencies across all crates (auto-insta
 test: ## Run all workspace tests (Stable) — use detected CPU count for parallelism
 	@echo "==> Running tests (stable) with $(CPU_COUNT) jobs/threads"
 	@TMPDIR="$${TMPDIR:-/tmp}" RUST_TEST_THREADS=$(CPU_COUNT) ./bin/test.sh -j$(CPU_COUNT) --workspace -- --test-threads=$(CPU_COUNT)
+	@$(MAKE) player-test
+
+.PHONY: player-test
+player-test: ## Run local browser-player regression tests (Node.js)
+	@node frontend/tests/player_fallback.cjs
 
 .PHONY: admission-test
 admission-test: ## Verify admission, provider-slot, seek/reopen, shared-stream, and cleanup invariants

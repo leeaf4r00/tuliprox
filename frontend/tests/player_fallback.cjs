@@ -36,3 +36,26 @@ for (const live of [true, false]) {
   assert.equal(destroyed, 1);
   console.log(`PASS native fallback: live=${live}, playback mode and cleanup preserved`);
 }
+
+{
+  const listeners = new Map();
+  let fallbackAttempts = 0;
+  let errors = 0;
+  const video = {
+    currentTime: 0, paused: true, error: { code: 4 },
+    addEventListener(name, fn) { listeners.set(name, fn); },
+    removeEventListener(name, fn) { if (listeners.get(name) === fn) listeners.delete(name); },
+    pause() {}, load() {}, removeAttribute() {}
+  };
+  const window = { mpegts: {
+    isSupported: () => true,
+    createPlayer() { fallbackAttempts++; throw new Error('HLS must not use MPEG-TS fallback'); }
+  } };
+  vm.runInNewContext(source, { window, setTimeout, clearTimeout });
+  const handle = window.attachTuliproxVideo(video, '/live/123.m3u8', true, false, true, () => errors++, null);
+  listeners.get('error')();
+  assert.equal(fallbackAttempts, 0);
+  assert.equal(errors, 1);
+  window.detachTuliproxVideo(handle, video);
+  console.log('PASS unsupported HLS does not enter MPEG-TS fallback');
+}
