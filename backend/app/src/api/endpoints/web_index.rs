@@ -371,6 +371,48 @@ fn inject_nonce_with_parser(html: String, nonce_b64: &str) -> String {
     lol_html::rewrite_str(&html, settings).unwrap_or(html)
 }
 
+fn build_content_security_policy(nonce_b64: &str, custom_attributes: Option<&[String]>) -> String {
+    let mut directives: Vec<(String, Vec<String>)> = vec![
+        ("default-src".to_string(), vec!["'self'".to_string()]),
+        (
+            "script-src".to_string(),
+            vec!["'self'".to_string(), "'wasm-unsafe-eval'".to_string(), format!("'nonce-{nonce_b64}'")],
+        ),
+        ("frame-ancestors".to_string(), vec!["'none'".to_string()]),
+    ];
+
+    for attribute in custom_attributes.into_iter().flatten() {
+        let attribute = attribute.replace("{nonce_b64}", nonce_b64);
+        for attribute in attribute.split(';') {
+            let mut tokens = attribute.split_whitespace();
+            let Some(name) = tokens.next() else {
+                continue;
+            };
+            let name = name.to_ascii_lowercase();
+            let values = tokens.map(str::to_string).collect::<Vec<_>>();
+
+            // Keep the browser's existing first-directive-wins behavior.
+            if !directives.iter().any(|(existing_name, _)| *existing_name == name) {
+                directives.push((name, values));
+            }
+        }
+    }
+
+    // HLS and MPEG-TS playback use blob URLs through Media Source Extensions.
+    // An explicitly configured media policy still takes precedence.
+    if !directives.iter().any(|(name, _)| name == "media-src") {
+        directives.push(("media-src".to_string(), vec!["'self'".to_string(), "blob:".to_string()]));
+    }
+
+    directives
+        .into_iter()
+        .map(|(name, values)| {
+            if values.is_empty() { name } else { format!("{name} {}", values.join(" ")) }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 async fn index(
     axum::extract::State(app_state): axum::extract::State<Arc<AppState>>,
 ) -> impl axum::response::IntoResponse + Send {
@@ -429,20 +471,8 @@ async fn index(
             if let Some(csp) =
                 config.web_ui.as_ref().and_then(|w| w.content_security_policy.as_ref()).filter(|c| c.enabled)
             {
-                let mut attrs = vec![
-                    "default-src 'self'".to_string(),
-                    format!("script-src 'self' 'wasm-unsafe-eval' 'nonce-{nonce_b64}'"),
-                    "frame-ancestors 'none'".to_string(),
-                ];
-
-                if let Some(custom) = &csp.custom_attributes {
-                    attrs.extend(custom.clone());
-                }
-
-                for attr in &mut attrs {
-                    *attr = attr.replace("{nonce_b64}", &nonce_b64);
-                }
-                builder = builder.header("Content-Security-Policy", attrs.join("; "));
+                let policy = build_content_security_policy(&nonce_b64, csp.custom_attributes.as_deref());
+                builder = builder.header("Content-Security-Policy", policy);
             }
             return try_unwrap_body!(builder.body(new_content));
         }
@@ -604,7 +634,7 @@ pub fn index_register_with_path(web_dir_path: &Path, web_ui_path: &str) -> axum:
 
 #[cfg(test)]
 mod tests {
-    use super::api_user_can_access_web_ui;
+    use super::{api_user_can_access_web_ui, build_content_security_policy};
     use axum::{
         body::Body,
         http::{Method, Request, StatusCode},
@@ -622,6 +652,42 @@ mod tests {
     #[test]
     fn allows_api_user_when_ui_is_enabled() {
         assert!(api_user_can_access_web_ui(true));
+    }
+
+    #[test]
+    fn content_security_policy_allows_blob_media_and_preserves_directive_precedence() {
+        let custom_attributes = vec![
+            "default-src 'self'".to_string(),
+            "script-src 'self' 'wasm-unsafe-eval' 'nonce-{nonce_b64}' https://cdn.example".to_string(),
+            "frame-ancestors 'none'".to_string(),
+        ];
+
+        let policy = build_content_security_policy("test-nonce", Some(&custom_attributes));
+        let directive_names = policy
+            .split(';')
+            .map(|directive| directive.split_whitespace().next().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(directive_names.iter().filter(|name| **name == "default-src").count(), 1);
+        assert_eq!(directive_names.iter().filter(|name| **name == "script-src").count(), 1);
+        assert_eq!(directive_names.iter().filter(|name| **name == "frame-ancestors").count(), 1);
+        assert!(policy.contains("media-src 'self' blob:"));
+        assert!(policy.contains("'nonce-test-nonce'"));
+        assert!(!policy.contains("https://cdn.example"));
+    }
+
+    #[test]
+    fn content_security_policy_preserves_explicit_media_restrictions() {
+        let custom_attributes = vec![
+            "media-src 'self'; MEDIA-SRC https://media.example".to_string(),
+        ];
+
+        let policy = build_content_security_policy("test-nonce", Some(&custom_attributes));
+
+        assert_eq!(policy.matches("media-src").count(), 1);
+        assert!(policy.ends_with("media-src 'self'"));
+        assert!(!policy.contains("blob:"));
+        assert!(!policy.contains("https://media.example"));
     }
 
     #[tokio::test]
