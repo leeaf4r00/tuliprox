@@ -16,6 +16,19 @@ inputs:
     type: m3u
     enabled: false
     url: "${env:DNSACC_M3U_URL}"
+  # Optional direct provider playlist. Set CLDNEW_M3U_URL in the local config/.env before enabling it.
+  - name: cldnew
+    type: m3u
+    enabled: false
+    url: "${env:CLDNEW_M3U_URL}"
+  - name: biturl
+    type: m3u
+    enabled: true
+    url: "${env:BITURL_M3U_URL}"
+  - name: firetvcb
+    type: m3u
+    enabled: true
+    url: "${env:FIRETVCB_M3U_URL}"
 sources:
   - inputs:
       - iptv-org
@@ -122,3 +135,30 @@ sources:
           - type: xtream
           - type: m3u
             filename: dnsacc.m3u
+  - inputs:
+      - cldnew
+    targets:
+      - name: cldnew
+        enabled: false
+        output:
+          - type: xtream
+          - type: m3u
+            filename: cldnew.m3u
+  - inputs:
+      - biturl
+    targets:
+      - name: biturl
+        enabled: true
+        output:
+          - type: xtream
+          - type: m3u
+            filename: biturl.m3u
+  - inputs:
+      - firetvcb
+    targets:
+      - name: firetvcb
+        enabled: true
+        output:
+          - type: xtream
+          - type: m3u
+            filename: firetvcb.m3u

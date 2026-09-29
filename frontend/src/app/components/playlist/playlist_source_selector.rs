@@ -37,6 +37,28 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
     let services_ctx = use_service_context();
     let playlist_ctx = use_context::<PlaylistContext>().expect("Playlist context not found");
     let playlist_explorer_ctx = use_context::<PlaylistExplorerContext>();
+    let active_playlist_request = playlist_explorer_ctx
+        .as_ref()
+        .and_then(|context| (*context.playlist_request).clone());
+    let active_playlist_name = active_playlist_request.as_ref().map(|request| match request {
+        PlaylistRequest::Target(target_id) => playlist_ctx
+            .sources
+            .as_ref()
+            .as_ref()
+            .and_then(|sources| {
+                sources
+                    .iter()
+                    .flat_map(|(_, targets)| targets)
+                    .find(|target| target.id == *target_id)
+                    .map(|target| target.name.clone())
+            })
+            .unwrap_or_else(|| format!("{} #{target_id}", translate.t("LABEL.TARGET"))),
+        PlaylistRequest::Input(input_name) => input_name.clone(),
+        PlaylistRequest::CustomXtream(_) => {
+            format!("{} ({})", translate.t("LABEL.CUSTOM"), translate.t("LABEL.XTREAM"))
+        }
+        PlaylistRequest::CustomM3u(_) => format!("{} ({})", translate.t("LABEL.CUSTOM"), translate.t("LABEL.M3U")),
+    });
     let active_source = use_state(|| ExplorerSourceType::Hosted);
     let loading = use_state(|| false);
     let custom_provider = use_state(|| InputType::Xtream);
@@ -59,8 +81,7 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
             let on_select = on_select.clone();
             Callback::from(move |request: PlaylistRequest| on_select.emit(request))
         } else {
-            let playlist_explorer_ctx_clone =
-                playlist_explorer_ctx.expect("PlaylistExplorer context not found").clone();
+            let playlist_explorer_ctx_clone = playlist_explorer_ctx.as_ref().expect("PlaylistExplorer context not found").clone();
             Callback::from(move |request: PlaylistRequest| {
                 if !*set_loading {
                     let services = services.clone();
@@ -138,6 +159,8 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
     let render_hosted = {
         let playlist_ctx_clone = playlist_ctx.clone();
         let handle_defined_source = handle_source_download.clone();
+        let active_playlist_request = active_playlist_request.clone();
+        let active_playlist_hint = translate.t("LABEL.ACTIVE_PLAYLIST");
         move || {
             html! {
             <>
@@ -149,8 +172,15 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
                                 .map(Rc::clone)
                                 .map(|target| {
                                     let handle_click = handle_defined_source.clone();
+                                    let is_active = matches!(
+                                        active_playlist_request.as_ref(),
+                                        Some(PlaylistRequest::Target(active_id)) if *active_id == target.id
+                                    );
                                     html! {
                                     <TextButton name={target.name.clone()} title={target.name.clone()} icon={"Download"}
+                                    class={if is_active {"active"} else {""}}
+                                    aria_pressed={Some(is_active.to_string())}
+                                    hint={if is_active {Some(active_playlist_hint.clone())} else {None}}
                                     onclick={move |_| handle_click.emit(PlaylistRequest::Target(target.id))}/>
                                     }
                             })}
@@ -168,6 +198,8 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
     let render_provider = {
         let playlist_ctx_clone = playlist_ctx.clone();
         let handle_defined_source = handle_source_download.clone();
+        let active_playlist_request = active_playlist_request.clone();
+        let active_playlist_hint = translate.t("LABEL.ACTIVE_PLAYLIST");
         move || {
             html! {
             <>
@@ -178,12 +210,19 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
                             { for collect_provider_buttons(data.as_ref()).into_iter().map(|(name, id)| {
                                 let handle_click = handle_defined_source.clone();
                                 let input_name = name.to_string();
+                                let is_active = matches!(
+                                    active_playlist_request.as_ref(),
+                                    Some(PlaylistRequest::Input(active_name)) if active_name == &input_name
+                                );
                                 html! {
                                     <TextButton
                                         key={id}
                                         name={name.to_string()}
                                         title={name.to_string()}
                                         icon={"CloudDownload"}
+                                        class={if is_active {"active"} else {""}}
+                                        aria_pressed={Some(is_active.to_string())}
+                                        hint={if is_active {Some(active_playlist_hint.clone())} else {None}}
                                         onclick={move |_| handle_click.emit(PlaylistRequest::Input(input_name.clone()))}
                                     />
                                 }
@@ -251,6 +290,12 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
 
     let set_custom_provider_1 = custom_provider.clone();
     let set_custom_provider_2 = custom_provider.clone();
+    let active_playlist_status = active_playlist_name.map(|name| html! {
+        <div class="tp__playlist-source-selector__active-playlist" role="status">
+            <span>{translate.t("LABEL.ACTIVE_PLAYLIST")}</span>
+            <strong>{name}</strong>
+        </div>
+    });
 
     html! {
       <div class="tp__playlist-source-selector tp__list-list">
@@ -294,6 +339,7 @@ pub fn PlaylistSourceSelector(props: &PlaylistSourceSelectorProps) -> Html {
                         { render_custom() }
                     </Panel>
                 </div>
+                {active_playlist_status.unwrap_or_default()}
               </Card>
             </CollapsePanel>
         </div>

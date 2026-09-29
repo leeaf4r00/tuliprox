@@ -142,6 +142,25 @@ $series-backdrop-mobile-height: 150px;
     -webkit-overflow-scrolling: touch;
   }
 
+  &__favorites {
+    display: flex;
+    flex-flow: column;
+    gap: var(--gap-large);
+    width: 100%;
+  }
+
+  &__favorites-section {
+    display: flex;
+    flex-flow: column;
+    gap: var(--gap-default);
+    width: 100%;
+  }
+
+  &__favorites-title {
+    margin: 0;
+    font-size: var(--font-size-lg);
+  }
+
   &__group,
   &__categories {
     display: flex;
@@ -413,6 +432,14 @@ $series-backdrop-mobile-height: 150px;
       max-height: 4rem;
       min-height: 4rem;
       align-items: center;
+
+      .tp__playlist-explorer__channel-title {
+        min-width: 0;
+        padding-right: 3rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
 
       @include channel-logo(3rem, 3rem, var(--border-radius));
 

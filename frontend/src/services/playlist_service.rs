@@ -236,7 +236,16 @@ impl PlaylistService {
         pli: &Rc<UiPlaylistItem>,
         playlist_request: &PlaylistRequest,
     ) -> Option<SeriesStreamProperties> {
-        let path = format!("{}/{}/{}", self.playlist_api_series_info_path, pli.virtual_id, pli.provider_id);
+        self.get_series_info_by_id(pli.virtual_id, &pli.provider_id, playlist_request).await
+    }
+
+    pub async fn get_series_info_by_id(
+        &self,
+        virtual_id: u32,
+        provider_id: &str,
+        playlist_request: &PlaylistRequest,
+    ) -> Option<SeriesStreamProperties> {
+        let path = format!("{}/{virtual_id}/{provider_id}", self.playlist_api_series_info_path);
         request_post::<&PlaylistRequest, XtreamSeriesInfoDoc>(&path, playlist_request, None, Some(Encoding::Cbor))
             .await
             .map_or_else(
@@ -244,7 +253,7 @@ impl PlaylistService {
                     error!("{err}");
                     None
                 },
-                |response| response.as_ref().map(|doc| SeriesStreamProperties::from_info_doc(doc, pli.virtual_id)),
+                |response| response.as_ref().map(|doc| SeriesStreamProperties::from_info_doc(doc, virtual_id)),
             )
     }
 

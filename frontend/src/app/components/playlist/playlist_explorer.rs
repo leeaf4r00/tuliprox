@@ -62,9 +62,14 @@ extern "C" {
 
 const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
 const TP_EXPLORER_FAVORITE_SERIES_KEY: &str = "tp-explorer-favorite-series";
+const TP_EXPLORER_FAVORITE_ITEMS_KEY: &str = "tp-explorer-favorite-items";
 
 fn series_favorite_key(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+fn playlist_item_favorite_key(item: &UiPlaylistItem) -> String {
+    format!("{}:{}:{}:{}", item.xtream_cluster.as_stream_type(), item.virtual_id, item.provider_id, item.input_name)
 }
 
 fn browser_player_resume_key(episode_id: u32, title: &str) -> String {
@@ -116,9 +121,19 @@ fn load_favorite_series() -> HashSet<String> {
         .collect()
 }
 
+fn load_favorite_items() -> HashSet<String> {
+    crate::utils::get_local_storage_item(TP_EXPLORER_FAVORITE_ITEMS_KEY)
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|key| !key.is_empty())
+        .collect()
+}
+
 #[derive(Clone)]
 struct ChannelSelection {
     virtual_id: VirtualId,
+    provider_id: String,
     cluster: XtreamCluster,
     downloadable: bool,
     url: String,
@@ -301,6 +316,9 @@ struct BrowserPlayerEpisode {
 struct BrowserPlayerProps {
     title: String,
     src: String,
+    virtual_id: u32,
+    cluster: XtreamCluster,
+    source_url: String,
     is_hls: bool,
     is_mpeg_ts: bool,
     is_live: bool,
@@ -360,6 +378,10 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     let services = use_service_context();
     let video_ref = use_node_ref();
     let playback_error = use_state(|| false);
+    let is_reconnecting = use_state(|| false);
+    let pending_resume_position = use_state(|| None::<f64>);
+    let recovery_pending = use_mut_ref(|| false);
+    let recovery_position = use_mut_ref(|| 0.0_f64);
     let player_tracks = use_state(BrowserPlayerTracks::default);
     let volume = use_state(|| 1.0_f64);
     let muted = use_state(|| false);
@@ -368,6 +390,9 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     let current_is_hls = use_state(|| props.is_hls);
     let current_is_mpeg_ts = use_state(|| props.is_mpeg_ts);
     let current_episode_id = use_state(|| props.current_episode_id);
+    let current_virtual_id = use_state(|| props.virtual_id);
+    let current_cluster = use_state(|| props.cluster);
+    let current_source_url = use_state(|| props.source_url.clone());
     let initial_episode_index = props
         .episodes
         .iter()
@@ -418,7 +443,19 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     {
         let video_ref = video_ref.clone();
         let playback_error = playback_error.clone();
+        let is_reconnecting = is_reconnecting.clone();
+        let pending_resume_position = pending_resume_position.clone();
+        let recovery_pending = recovery_pending.clone();
+        let recovery_position = recovery_position.clone();
         let player_tracks = player_tracks.clone();
+        let services = services.clone();
+        let playlist_request = props.playlist_request.clone();
+        let current_virtual_id = current_virtual_id.clone();
+        let current_cluster = current_cluster.clone();
+        let current_source_url = current_source_url.clone();
+        let current_src = current_src.clone();
+        let current_is_hls = current_is_hls.clone();
+        let current_is_mpeg_ts = current_is_mpeg_ts.clone();
         let dependencies = (
             (*current_src).clone(),
             *current_is_hls,
@@ -429,9 +466,118 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             playback_error.set(false);
             player_tracks.set(BrowserPlayerTracks::default());
             let player = video_ref.cast::<HtmlVideoElement>().map(|video| {
+                let live_stream = *is_live;
                 let playback_error = playback_error.clone();
+                let is_reconnecting = is_reconnecting.clone();
+                let pending_resume_position = pending_resume_position.clone();
+                let recovery_pending = recovery_pending.clone();
+                let recovery_position = recovery_position.clone();
                 let player_tracks = player_tracks.clone();
-                let on_error = Closure::<dyn FnMut()>::new(move || playback_error.set(true));
+                let services = services.clone();
+                let playlist_request = playlist_request.clone();
+                let current_virtual_id = current_virtual_id.clone();
+                let current_cluster = current_cluster.clone();
+                let current_source_url = current_source_url.clone();
+                let current_src = current_src.clone();
+                let current_is_hls = current_is_hls.clone();
+                let current_is_mpeg_ts = current_is_mpeg_ts.clone();
+                let fallback_src = (*src).clone();
+                let callback_is_reconnecting = is_reconnecting.clone();
+                let callback_pending_resume_position = pending_resume_position.clone();
+                let on_error = Closure::<dyn FnMut(JsValue)>::new(move |resume_position: JsValue| {
+                    if live_stream {
+                        match resume_position.as_f64() {
+                            Some(-1.0) => {
+                                playback_error.set(false);
+                                callback_is_reconnecting.set(true);
+                                callback_pending_resume_position.set(None);
+                                return;
+                            }
+                            Some(-2.0) => {
+                                callback_is_reconnecting.set(false);
+                                return;
+                            }
+                            _ => {
+                                playback_error.set(true);
+                                callback_is_reconnecting.set(false);
+                                callback_pending_resume_position.set(None);
+                                *recovery_pending.borrow_mut() = false;
+                                return;
+                            }
+                        }
+                    }
+
+                    let Some(resume_position) = resume_position.as_f64().filter(|position| {
+                        position.is_finite() && *position > 0.0
+                    }) else {
+                        playback_error.set(true);
+                        callback_is_reconnecting.set(false);
+                        callback_pending_resume_position.set(None);
+                        *recovery_pending.borrow_mut() = false;
+                        return;
+                    };
+
+                    if *recovery_pending.borrow() {
+                        playback_error.set(true);
+                        callback_is_reconnecting.set(false);
+                        callback_pending_resume_position.set(None);
+                        *recovery_pending.borrow_mut() = false;
+                        return;
+                    }
+
+                    *recovery_pending.borrow_mut() = true;
+                    *recovery_position.borrow_mut() = resume_position;
+                    callback_pending_resume_position.set(Some(resume_position));
+                    callback_is_reconnecting.set(true);
+
+                    let services = services.clone();
+                    let playlist_request = playlist_request.clone();
+                    let virtual_id = *current_virtual_id;
+                    let cluster = *current_cluster;
+                    let source_url = (*current_source_url).clone();
+                    let fallback_src = fallback_src.clone();
+                    let playback_error = playback_error.clone();
+                    let is_reconnecting = callback_is_reconnecting.clone();
+                    let pending_resume_position = callback_pending_resume_position.clone();
+                    let recovery_pending = recovery_pending.clone();
+                    let current_src = current_src.clone();
+                    let current_is_hls = current_is_hls.clone();
+                    let current_is_mpeg_ts = current_is_mpeg_ts.clone();
+                    spawn_local(async move {
+                        let resolved_url = match playlist_request.as_ref() {
+                            Some(PlaylistRequest::Target(target_id)) => {
+                                let request = PlaylistUrlResolveRequest::Webplayer {
+                                    target_id: *target_id,
+                                    virtual_id,
+                                    cluster,
+                                };
+                                services.playlist.resolve_url(request).await.unwrap_or_default()
+                            }
+                            Some(request) if !source_url.is_empty() => {
+                                let resolve_request = PlaylistUrlResolveRequest::Provider {
+                                    playlist_request: request.clone(),
+                                    url: source_url.clone(),
+                                };
+                                services.playlist.resolve_url(resolve_request).await.unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        };
+
+                        if resolved_url.is_empty() || resolved_url == fallback_src {
+                            playback_error.set(true);
+                            is_reconnecting.set(false);
+                            pending_resume_position.set(None);
+                            *recovery_pending.borrow_mut() = false;
+                            return;
+                        }
+
+                        let is_hls = url_indicates_hls(&resolved_url);
+                        let is_mpeg_ts = !is_hls && url_indicates_mpeg_ts(&resolved_url);
+                        current_src.set(resolved_url);
+                        current_is_hls.set(is_hls);
+                        current_is_mpeg_ts.set(is_mpeg_ts);
+                    });
+                });
                 let on_tracks = Closure::<dyn FnMut(JsValue)>::new(move |payload: JsValue| {
                     let Some(payload) = payload.as_string() else {
                         return;
@@ -440,6 +586,32 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                         player_tracks.set(tracks);
                     }
                 });
+                let restore_handler = if (*pending_resume_position).is_some() {
+                    let pending_resume_position = pending_resume_position.clone();
+                    let is_reconnecting = is_reconnecting.clone();
+                    let restore_video = video.clone();
+                    let restore = Closure::<dyn FnMut()>::new(move || {
+                        if let Some(position) = *pending_resume_position {
+                            let duration = restore_video.duration();
+                            let position = if duration.is_finite() && duration > 1.0 {
+                                position.min(duration - 1.0)
+                            } else {
+                                position
+                            };
+                            restore_video.set_current_time(position);
+                            pending_resume_position.set(None);
+                            is_reconnecting.set(false);
+                            let _ = restore_video.play();
+                        }
+                    });
+                    let _ = video.add_event_listener_with_callback(
+                        "loadedmetadata",
+                        restore.as_ref().unchecked_ref(),
+                    );
+                    Some(restore)
+                } else {
+                    None
+                };
                 let player_handle = attach_tuliprox_video(
                     &video,
                     src,
@@ -449,11 +621,18 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     on_error.as_ref().unchecked_ref(),
                     on_tracks.as_ref().unchecked_ref(),
                 );
-                (video, player_handle, on_error, on_tracks)
+                (video, player_handle, on_error, on_tracks, restore_handler)
             });
 
             move || {
-                if let Some((video, player_handle, on_error, on_tracks)) = player {
+                if let Some((video, player_handle, on_error, on_tracks, restore_handler)) = player {
+                    if let Some(restore_handler) = restore_handler {
+                        let _ = video.remove_event_listener_with_callback(
+                            "loadedmetadata",
+                            restore_handler.as_ref().unchecked_ref(),
+                        );
+                        drop(restore_handler);
+                    }
                     detach_tuliprox_video(&player_handle, &video);
                     drop(on_error);
                     drop(on_tracks);
@@ -474,6 +653,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         let current_episode_id = current_episode_id.clone();
         let current_episode_index = current_episode_index.clone();
         let switching_episode = switching_episode.clone();
+        let current_virtual_id = current_virtual_id.clone();
+        let current_source_url = current_source_url.clone();
+        let recovery_pending = recovery_pending.clone();
+        let is_reconnecting = is_reconnecting.clone();
+        let pending_resume_position = pending_resume_position.clone();
         let playback_error = playback_error.clone();
         let video_ref = video_ref.clone();
         Callback::from(move |index: usize| {
@@ -500,6 +684,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             let current_episode_id = current_episode_id.clone();
             let current_episode_index = current_episode_index.clone();
             let switching_episode = switching_episode.clone();
+            let current_virtual_id = current_virtual_id.clone();
+            let current_source_url = current_source_url.clone();
+            let recovery_pending = recovery_pending.clone();
+            let is_reconnecting = is_reconnecting.clone();
+            let pending_resume_position = pending_resume_position.clone();
             spawn_local(async move {
                 let resolved_url = match playlist_request.as_ref() {
                     Some(PlaylistRequest::Target(target_id)) => {
@@ -552,6 +741,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 current_is_mpeg_ts.set(is_mpeg_ts);
                 current_episode_id.set(Some(episode.virtual_id));
                 current_episode_index.set(index);
+                current_virtual_id.set(episode.virtual_id);
+                current_source_url.set(episode.url);
+                pending_resume_position.set(None);
+                is_reconnecting.set(false);
+                *recovery_pending.borrow_mut() = false;
                 switching_episode.set(false);
             });
         })
@@ -590,6 +784,8 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     let on_video_time_update = {
         let resume_key = resume_key.clone();
         let last_saved_position = last_saved_position.clone();
+        let recovery_pending = recovery_pending.clone();
+        let recovery_position = recovery_position.clone();
         Callback::from(move |event: Event| {
             let Some(video) = event.target_dyn_into::<HtmlVideoElement>() else {
                 return;
@@ -602,6 +798,9 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             }
             if (position - last_saved.1 >= 5.0) || (duration.is_finite() && duration - position <= 10.0) {
                 last_saved.1 = save_browser_player_position(&video, &resume_key).unwrap_or_default();
+            }
+            if *recovery_pending.borrow() && position >= *recovery_position.borrow() + 30.0 {
+                *recovery_pending.borrow_mut() = false;
             }
         })
     };
@@ -927,6 +1126,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 } else {
                     Html::default()
                 }}
+                {if *is_reconnecting {
+                    html! { <p class="tp__browser-player__hint" role="status">{translate.t("MESSAGES.PLAYBACK.RECONNECTING")}</p> }
+                } else {
+                    Html::default()
+                }}
                 <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.BROWSER_HINT")}</p>
                 {if *playback_error {
                     html! { <p class="tp__browser-player__error" role="alert">{translate.t("MESSAGES.PLAYBACK.ERROR")}</p> }
@@ -1054,6 +1258,7 @@ pub fn PlaylistExplorer() -> Html {
     let current_item = use_state(|| ExplorerLevel::Categories);
     let playlist = use_state(|| (*context.playlist).clone());
     let favorite_series = use_state(load_favorite_series);
+    let favorite_items = use_state(load_favorite_items);
     let handle_toggle_series_favorite = {
         let favorite_series = favorite_series.clone();
         Callback::from(move |title: String| {
@@ -1071,6 +1276,24 @@ pub fn PlaylistExplorer() -> Html {
                 crate::utils::set_local_storage_item(TP_EXPLORER_FAVORITE_SERIES_KEY, &value);
             }
             favorite_series.set(next);
+        })
+    };
+    let handle_toggle_item_favorite = {
+        let favorite_items = favorite_items.clone();
+        Callback::from(move |key: String| {
+            if key.is_empty() {
+                return;
+            }
+            let mut next = (*favorite_items).clone();
+            if !next.remove(&key) {
+                next.insert(key);
+            }
+            let mut persisted = next.iter().cloned().collect::<Vec<_>>();
+            persisted.sort();
+            if let Ok(value) = serde_json::to_string(&persisted) {
+                crate::utils::set_local_storage_item(TP_EXPLORER_FAVORITE_ITEMS_KEY, &value);
+            }
+            favorite_items.set(next);
         })
     };
     let handle_favorites_toggle = {
@@ -1147,6 +1370,7 @@ pub fn PlaylistExplorer() -> Html {
             if let Some(target) = event.target_dyn_into::<web_sys::Element>() {
                 set_selected_channel.set(Some(ChannelSelection {
                     virtual_id: VirtualId::new(dto.virtual_id),
+                    provider_id: dto.provider_id.to_string(),
                     cluster: dto.xtream_cluster,
                     downloadable: dto.xtream_cluster == XtreamCluster::Video,
                     url: dto.url.to_string(),
@@ -1245,22 +1469,85 @@ pub fn PlaylistExplorer() -> Html {
                             let selected = dto.clone();
 
                             spawn_local(async move {
+                                let mut player_title = selected.title.clone();
+                                let mut player_virtual_id = selected.virtual_id.get();
+                                let mut player_source_url = selected.url.clone();
+                                let mut episodes = selected
+                                    .series_episodes
+                                    .as_ref()
+                                    .map_or_else(Vec::new, |episodes| episodes.as_ref().clone());
+
+                                // A provider series card represents the whole series. Load its
+                                // episodes before opening the player so the player doesn't treat
+                                // the series card as a single episode.
+                                if selected.cluster == XtreamCluster::Series && episodes.is_empty() {
+                                    if let Some(request) = playlist_request.as_ref() {
+                                        if let Some(properties) = services
+                                            .playlist
+                                            .get_series_info_by_id(
+                                                selected.virtual_id.get(),
+                                                &selected.provider_id,
+                                                request,
+                                            )
+                                            .await
+                                        {
+                                            if let Some(series_episodes) =
+                                                properties.details.and_then(|details| details.episodes)
+                                            {
+                                                episodes = series_episodes
+                                                    .into_iter()
+                                                    .map(|episode| BrowserPlayerEpisode {
+                                                        virtual_id: episode.id,
+                                                        label: series_episode_display_title(
+                                                            &episode.title,
+                                                            &selected.title,
+                                                        ),
+                                                        title: episode.title.to_string(),
+                                                        url: episode.direct_source.to_string(),
+                                                        input_name: selected.input_name.clone(),
+                                                        season: episode.season,
+                                                        episode: episode.episode_num,
+                                                    })
+                                                    .collect();
+                                                episodes.sort_by_key(|episode| {
+                                                    (episode.season, episode.episode, episode.virtual_id)
+                                                });
+                                                if let Some(first_episode) = episodes.first() {
+                                                    player_title = first_episode.title.clone();
+                                                    player_virtual_id = first_episode.virtual_id;
+                                                    player_source_url = first_episode.url.clone();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if selected.cluster == XtreamCluster::Series && player_source_url.is_empty() {
+                                    if let Some(request) = playlist_request.as_ref() {
+                                        player_source_url = services
+                                            .playlist
+                                            .get_episode(player_virtual_id, request)
+                                            .await
+                                            .map_or_else(String::new, |episode| episode.url.to_string());
+                                    }
+                                }
+
                                 let resolved_url = match playlist_request.as_ref() {
                                     Some(PlaylistRequest::Target(target_id)) => {
                                         let request = PlaylistUrlResolveRequest::Webplayer {
                                             target_id: *target_id,
-                                            virtual_id: selected.virtual_id.get(),
+                                            virtual_id: player_virtual_id,
                                             cluster: selected.cluster,
                                         };
                                         services.playlist.resolve_url(request).await.unwrap_or_default()
                                     }
                                     Some(request) => {
-                                        let source_url = if !selected.url.is_empty() {
-                                            selected.url.clone()
+                                        let source_url = if !player_source_url.is_empty() {
+                                            player_source_url.clone()
                                         } else if selected.cluster == XtreamCluster::Series {
                                             services
                                                 .playlist
-                                                .get_episode(selected.virtual_id.get(), request)
+                                                .get_episode(player_virtual_id, request)
                                                 .await
                                                 .map_or_else(String::new, |episode| episode.url.to_string())
                                         } else {
@@ -1281,7 +1568,7 @@ pub fn PlaylistExplorer() -> Html {
                                                 .unwrap_or(source_url)
                                         }
                                     }
-                                    None => selected.url.clone(),
+                                    None => player_source_url.clone(),
                                 };
 
                                 if resolved_url.is_empty() {
@@ -1289,19 +1576,25 @@ pub fn PlaylistExplorer() -> Html {
                                     return;
                                 }
 
-                                let is_hls = url_indicates_hls(&selected.url) || url_indicates_hls(&resolved_url);
+                                let is_hls = url_indicates_hls(&player_source_url) || url_indicates_hls(&resolved_url);
                                 let is_mpeg_ts = !is_hls
-                                    && (url_indicates_mpeg_ts(&selected.url) || url_indicates_mpeg_ts(&resolved_url));
-                                let episodes = selected
-                                    .series_episodes
-                                    .as_ref()
-                                    .map_or_else(Vec::new, |episodes| episodes.as_ref().clone());
+                                    && (url_indicates_mpeg_ts(&player_source_url)
+                                        || url_indicates_mpeg_ts(&resolved_url));
                                 let current_episode_id = (selected.cluster == XtreamCluster::Series)
-                                    .then_some(selected.virtual_id.get());
+                                    .then_some(player_virtual_id);
+                                let current_source_url = episodes
+                    .iter()
+                    .find(|episode| Some(episode.virtual_id) == current_episode_id)
+                                    .map(|episode| episode.url.clone())
+                                    .filter(|url| !url.is_empty())
+                                    .unwrap_or_else(|| player_source_url.clone());
                                 let content = html! {
                                     <BrowserPlayer
-                                        title={selected.title.clone()}
+                                        title={player_title}
                                         src={resolved_url}
+                                        virtual_id={player_virtual_id}
+                                        cluster={selected.cluster}
+                                        source_url={current_source_url}
                                         is_hls={is_hls}
                                         is_mpeg_ts={is_mpeg_ts}
                                         is_live={selected.cluster == XtreamCluster::Live}
@@ -1796,8 +2089,39 @@ pub fn PlaylistExplorer() -> Html {
         let label = format!("{}: {title}", translate.t(label_key));
         let favorite_title = key.clone();
         let toggle_favorite = handle_toggle_series_favorite.clone();
-        let onclick = Callback::from(move |(_name, _event): (String, MouseEvent)| {
+        let onclick = Callback::from(move |(_name, event): (String, MouseEvent)| {
+            event.prevent_default();
+            event.stop_propagation();
             toggle_favorite.emit(favorite_title.clone());
+        });
+        html! {
+            <IconButton
+                class={if is_favorite { "tp__playlist-explorer__favorite-button is-favorite" } else { "tp__playlist-explorer__favorite-button" }}
+                name={key}
+                icon={if is_favorite { "Star" } else { "StarBorder" }}
+                hint={label.clone()}
+                aria_label={Some(label)}
+                aria_pressed={Some(is_favorite)}
+                onclick={onclick}
+            />
+        }
+    };
+
+    let render_item_favorite_button = |item: &UiPlaylistItem| {
+        let key = playlist_item_favorite_key(item);
+        let is_favorite = favorite_items.contains(&key);
+        let label_key = if is_favorite {
+            "LABEL.REMOVE_CONTENT_FROM_FAVORITES"
+        } else {
+            "LABEL.ADD_CONTENT_TO_FAVORITES"
+        };
+        let label = format!("{}: {}", translate.t(label_key), item.title);
+        let favorite_key = key.clone();
+        let toggle_favorite = handle_toggle_item_favorite.clone();
+        let onclick = Callback::from(move |(_name, event): (String, MouseEvent)| {
+            event.prevent_default();
+            event.stop_propagation();
+            toggle_favorite.emit(favorite_key.clone());
         });
         html! {
             <IconButton
@@ -1822,6 +2146,7 @@ pub fn PlaylistExplorer() -> Html {
             </button>
             {render_channel_logo(&chan.logo, &chan.title)}
             <span class="tp__playlist-explorer__channel-title">{chan.title.clone()}</span>
+            {render_item_favorite_button(chan)}
             </span>
         }
     };
@@ -1843,6 +2168,7 @@ pub fn PlaylistExplorer() -> Html {
                     </button>
                     <span class="tp__playlist-explorer__channel-video-title">{chan.title.clone()}</span>
                 </span>
+                {render_item_favorite_button(chan)}
             </span>
         }
     };
@@ -1908,6 +2234,7 @@ pub fn PlaylistExplorer() -> Html {
                           series_episodes: Option<Rc<Vec<BrowserPlayerEpisode>>>| {
         let channel_select = ChannelSelection {
             virtual_id: VirtualId::new(chan.id),
+            provider_id: String::new(),
             cluster: XtreamCluster::Series,
             downloadable: true,
             // Falls back to the episode fetch path in the menu handler when empty
@@ -1968,6 +2295,7 @@ pub fn PlaylistExplorer() -> Html {
                     .map(|(episode_number, chan)| {
                         let selected = ChannelSelection {
                             virtual_id: VirtualId::new(chan.virtual_id),
+                            provider_id: chan.provider_id.to_string(),
                             cluster: XtreamCluster::Series,
                             downloadable: true,
                             url: chan.url.to_string(),
@@ -2064,44 +2392,95 @@ pub fn PlaylistExplorer() -> Html {
     };
 
     let render_favorites = || {
-        let mut favorite_cards = Vec::new();
-        let mut rendered_titles = HashSet::new();
+        let mut favorite_sections = Vec::new();
+        let mut rendered_items = HashSet::new();
+
+        let mut live_cards = Vec::new();
+        if let Some(groups) = playlist.as_ref().and_then(|categories| categories.live.as_ref()) {
+            for group in groups {
+                for channel in &group.channels {
+                    let key = playlist_item_favorite_key(channel);
+                    if favorite_items.contains(&key) && rendered_items.insert(key) {
+                        live_cards.push(render_live(channel));
+                    }
+                }
+            }
+        }
+        if !live_cards.is_empty() {
+            favorite_sections.push(html! {
+                <div class="tp__playlist-explorer__favorites-section">
+                    <h3 class="tp__playlist-explorer__favorites-title">{translate.t("LABEL.FAVORITE_CHANNELS")}</h3>
+                    <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-live">
+                        {for live_cards}
+                    </div>
+                </div>
+            });
+        }
+
+        let mut movie_cards = Vec::new();
+        if let Some(groups) = playlist.as_ref().and_then(|categories| categories.vod.as_ref()) {
+            for group in groups {
+                for movie in &group.channels {
+                    let key = playlist_item_favorite_key(movie);
+                    if favorite_items.contains(&key) && rendered_items.insert(key) {
+                        movie_cards.push(render_movie(movie));
+                    }
+                }
+            }
+        }
+        if !movie_cards.is_empty() {
+            favorite_sections.push(html! {
+                <div class="tp__playlist-explorer__favorites-section">
+                    <h3 class="tp__playlist-explorer__favorites-title">{translate.t("LABEL.FAVORITE_MOVIES")}</h3>
+                    <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-video">
+                        {for movie_cards}
+                    </div>
+                </div>
+            });
+        }
+
+        let mut series_cards = Vec::new();
+        let mut rendered_series = HashSet::new();
         if let Some(groups) = playlist.as_ref().and_then(|categories| categories.series.as_ref()) {
             for group in groups {
                 for entry in build_series_entries(&group.channels) {
                     match entry {
                         SeriesExplorerEntry::Item(channel) => {
                             let key = series_favorite_key(&channel.title);
-                            if favorite_series.contains(&key) && rendered_titles.insert(key) {
-                                favorite_cards.push(render_series(group, &channel));
+                            if favorite_series.contains(&key) && rendered_series.insert(key) {
+                                series_cards.push(render_series(group, &channel));
                             }
                         }
                         SeriesExplorerEntry::Folder(folder) => {
                             let key = series_favorite_key(&folder.title);
-                            if favorite_series.contains(&key) && rendered_titles.insert(key) {
-                                favorite_cards.push(render_series_folder_card(group, Rc::new(folder)));
+                            if favorite_series.contains(&key) && rendered_series.insert(key) {
+                                series_cards.push(render_series_folder_card(group, Rc::new(folder)));
                             }
                         }
                     }
                 }
             }
         }
+        if !series_cards.is_empty() {
+            favorite_sections.push(html! {
+                <div class="tp__playlist-explorer__favorites-section">
+                    <h3 class="tp__playlist-explorer__favorites-title">{translate.t("LABEL.FAVORITE_SERIES")}</h3>
+                    <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-series">
+                        {for series_cards}
+                    </div>
+                </div>
+            });
+        }
 
-        if favorite_cards.is_empty() {
+        if favorite_sections.is_empty() {
             html! {
                 <NoContent
-                    text={translate.t("LABEL.NO_FAVORITE_SERIES")}
-                    hint={translate.t("LABEL.FAVORITE_SERIES_HINT")}
+                    text={translate.t("LABEL.NO_FAVORITES")}
+                    hint={translate.t("LABEL.FAVORITES_HINT")}
                 />
             }
         } else {
-            html! {
-                <div class="tp__playlist-explorer__group">
-                    <div class="tp__playlist-explorer__group-list tp__playlist-explorer__group-list-series">
-                        {for favorite_cards}
-                    </div>
-                </div>
-            }
+            html! { <div class="tp__playlist-explorer__favorites">{for favorite_sections}</div> }
         }
     };
 
@@ -2225,9 +2604,9 @@ pub fn PlaylistExplorer() -> Html {
 
     let is_favorites_view = matches!(&*current_item, ExplorerLevel::Favorites);
     let favorites_toggle_label = if is_favorites_view {
-        translate.t("LABEL.SHOW_ALL_SERIES")
+        translate.t("LABEL.SHOW_ALL_CONTENT")
     } else {
-        translate.t("LABEL.SHOW_FAVORITE_SERIES")
+        translate.t("LABEL.SHOW_FAVORITES")
     };
 
     html! {
@@ -2251,7 +2630,7 @@ pub fn PlaylistExplorer() -> Html {
                         ExplorerLevel::Group(ref group) => html!{ <span>{group.title.to_string()}</span> },
                         ExplorerLevel::SeriesFolder(_, ref folder) => html!{ <span>{folder.title.clone()}</span> },
                         ExplorerLevel::SeriesInfo(_, ref pli, _) => html!{ <span>{pli.title.to_string()}</span> },
-                        ExplorerLevel::Favorites => html!{ <span>{translate.t("LABEL.FAVORITE_SERIES")}</span> },
+                        ExplorerLevel::Favorites => html!{ <span>{translate.t("LABEL.FAVORITES")}</span> },
                     }
                   }
                 </div>
@@ -2337,6 +2716,7 @@ mod tests {
     fn popup_actions_require_download_write_permission() {
         let live = ChannelSelection {
             virtual_id: VirtualId::default(),
+            provider_id: String::new(),
             cluster: XtreamCluster::Live,
             downloadable: false,
             url: String::new(),
@@ -2346,6 +2726,7 @@ mod tests {
         };
         let vod = ChannelSelection {
             virtual_id: VirtualId::default(),
+            provider_id: String::new(),
             cluster: XtreamCluster::Video,
             downloadable: true,
             url: String::new(),
@@ -2355,6 +2736,7 @@ mod tests {
         };
         let series_container = ChannelSelection {
             virtual_id: VirtualId::default(),
+            provider_id: String::new(),
             cluster: XtreamCluster::Series,
             downloadable: false,
             url: String::new(),
@@ -2364,6 +2746,7 @@ mod tests {
         };
         let episode = ChannelSelection {
             virtual_id: VirtualId::default(),
+            provider_id: String::new(),
             cluster: XtreamCluster::Series,
             downloadable: true,
             url: String::new(),

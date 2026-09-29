@@ -36,6 +36,38 @@ fn default_episode_pattern_arc() -> Arc<Regex> {
     DEFAULT.get_or_init(|| Arc::new(CONSTANTS.re_episode_code.clone())).clone()
 }
 
+fn is_series_category(group: &str) -> bool {
+    let normalized = shared::utils::deunicode_string(group.trim()).to_lowercase();
+    let category = normalized.trim_start_matches(|ch: char| !ch.is_alphanumeric());
+    ["series", "serie", "mini series", "novelas", "novela", "telenovela", "programas de tv"]
+        .iter()
+        .any(|prefix| {
+            category.strip_prefix(prefix).is_some_and(|tail| {
+                tail.is_empty() || tail.starts_with(|ch: char| !ch.is_alphanumeric())
+            })
+        })
+}
+
+fn episode_match<'a>(title: &'a str, pattern: &Regex) -> Option<regex::Match<'a>> {
+    // A show name may itself look like an episode code (for example "4x4 Sob Medida").
+    // The episode marker nearest the end of the title is the actual episode number.
+    pattern.find_iter(title).last()
+}
+
+fn parse_series_episode(title: &str, pattern: &Regex) -> Option<(u32, u32)> {
+    let episode_code = episode_match(title, pattern)?;
+    parse_season_episode(&title[episode_code.start()..], pattern)
+}
+
+fn episode_series_name(title: &str, pattern: &Regex) -> Option<Arc<str>> {
+    parse_series_episode(title, pattern)?;
+    let episode_code = episode_match(title, pattern)?;
+    let name = title[..episode_code.start()]
+        .trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '-' | '–' | '|' | ':' | '.'))
+        .trim();
+    (!name.is_empty()).then(|| name.intern())
+}
+
 // other implementations like calculating text_distance on all titles took too much time
 // we keep it now as simple as possible and less memory intensive.
 fn get_title_group(text: &Arc<str>) -> Arc<str> {
@@ -544,6 +576,7 @@ async fn consume_m3u_scoped<F: FnMut(PlaylistItem)>(
         Some(config) => config.extensions.iter().map(Clone::clone).collect::<Vec<String>>(),
         None => default_supported_video_extensions(),
     };
+    let episode_pattern = resolve_episode_pattern(cfg);
     let mut lines = tokio::io::BufReader::new(lines).lines();
     let mut ord_counter: u32 = 1;
     let mut document_seen = false;
@@ -606,14 +639,35 @@ async fn consume_m3u_scoped<F: FnMut(PlaylistItem)>(
             header.upstream_user_agent = upstream_user_agent.take();
             header.source_ordinal = ord_counter;
             ord_counter += 1;
+            let series_category = is_series_category(&header.group)
+                || group_value.as_deref().is_some_and(is_series_category);
+            let inferred_series_name = series_category.then(|| {
+                episode_series_name(&header.title, &episode_pattern).unwrap_or_else(|| header.title.clone())
+            });
+            if inferred_series_name.is_some() && header.xtream_cluster != XtreamCluster::Live {
+                header.xtream_cluster = XtreamCluster::Series;
+                header.item_type = PlaylistItemType::Series;
+            }
             if header.xtream_cluster.is_series() {
-                let series_name =
-                    if header.group.is_empty() { get_title_group(&header.title) } else { header.group.clone() };
+                let series_name = if is_series_category(&header.group) || header.group.is_empty() {
+                    inferred_series_name.unwrap_or_else(|| header.title.clone())
+                } else {
+                    header.group.clone()
+                };
                 header.parent_code = series_name;
                 header.group = group_value
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
-                    .map_or_else(|| "Series".intern(), Internable::intern);
+                    .map_or_else(
+                        || {
+                            if series_category && is_series_category(&header.group) {
+                                header.group.clone()
+                            } else {
+                                "Series".intern()
+                            }
+                        },
+                        Internable::intern,
+                    );
             } else if header.group.is_empty() {
                 if let Some(group_value) = group_value {
                     header.group = group_value;
@@ -642,13 +696,12 @@ fn build_series_info(cfg: &Config, items: Vec<PlaylistItem>) -> Option<PlaylistI
     let input_name = first.header.input_name.clone();
 
     let mut episodes = Vec::with_capacity(items.len());
+    let mut unnumbered_items = Vec::new();
     let mut season_counts: HashMap<u32, u32> = HashMap::new();
-    let mut dropped = 0_usize;
-    let item_count = items.len();
 
     for item in items {
-        let Some((season, episode_num)) = parse_season_episode(&item.header.title, &episode_pattern) else {
-            dropped += 1;
+        let Some((season, episode_num)) = parse_series_episode(&item.header.title, &episode_pattern) else {
+            unnumbered_items.push(item);
             continue;
         };
 
@@ -664,14 +717,37 @@ fn build_series_info(cfg: &Config, items: Vec<PlaylistItem>) -> Option<PlaylistI
         });
     }
 
-    if episodes.is_empty() {
-        if dropped > 0 {
-            log::debug!("m3u series: dropped all {dropped} items in group {series_name:?} (no SxxEyy token)");
+    if !unnumbered_items.is_empty() {
+        // Some providers place entries in an explicit Series category but omit episode
+        // numbers from titles. Keep them playable in season 1, ordered after numbered
+        // episodes by their original playlist position instead of exposing them as Movies.
+        unnumbered_items.sort_by_key(|item| item.header.source_ordinal);
+        let mut next_episode_num = episodes
+            .iter()
+            .filter(|episode| episode.season == 1)
+            .map(|episode| episode.episode_num)
+            .max()
+            .unwrap_or_default();
+        for item in unnumbered_items {
+            next_episode_num = next_episode_num.checked_add(1)?;
+            *season_counts.entry(1).or_default() += 1;
+            episodes.push(SeriesStreamDetailEpisodeProperties {
+                id: fnv1a_32_parts(&[item.header.input_name.as_ref(), item.header.url.as_ref()]),
+                episode_num: next_episode_num,
+                season: 1,
+                title: item.header.title.clone(),
+                direct_source: item.header.url.clone(),
+                movie_image: item.header.logo.clone(),
+                ..Default::default()
+            });
         }
-        return None;
+        log::debug!(
+            "m3u series: assigned unnumbered entries in playlist order for group {series_name:?}"
+        );
     }
-    if dropped > 0 {
-        log::debug!("m3u series: dropped {dropped} of {item_count} items in group {series_name:?} (no SxxEyy token)");
+
+    if episodes.is_empty() {
+        return None;
     }
 
     episodes.sort_by_key(|episode| (episode.season, episode.episode_num));
@@ -820,6 +896,68 @@ mod test {
             password: Some("pass".to_string()),
             ..ConfigInput::default()
         }
+    }
+
+    #[tokio::test]
+    async fn m3u_plus_episodes_in_series_categories_are_not_movies() {
+        let content = "#EXTM3U\n\
+#EXTINF:-1 tvg-type=\"movie\" group-title=\"SÉRIES | Amazon Prime Video\",56 Dias S01E01\n\
+https://example.test/movie/user/pass/1.mp4\n\
+#EXTINF:-1 group-title=\"SÉRIES | Amazon Prime Video\",56 Dias S01E02\n\
+https://example.test/movie/user/pass/2.mp4\n\
+#EXTINF:-1 group-title=\"SÉRIES | Amazon Prime Video\",Outra Série S01E01\n\
+https://example.test/movie/user/pass/3.mp4\n\
+#EXTINF:-1 group-title=\"Filmes | Drama\",Filme S01E01\n\
+https://example.test/movie/user/pass/4.mp4\n\
+#EXTINF:-1 group-title=\"Series | Discovery+\",4x4 Sob Medida S01E01\n\
+https://example.test/movie/user/pass/5.mp4\n";
+
+        let groups = parse_m3u(&Config::default(), &test_input(), make_reader(content)).await;
+        let series_group = groups.iter().find(|group| group.title.as_ref() == "SÉRIES | Amazon Prime Video").unwrap();
+        assert_eq!(series_group.title.as_ref(), "SÉRIES | Amazon Prime Video");
+        assert_eq!(series_group.channels.len(), 2);
+        let show = series_group.channels.iter().find(|item| item.header.name.as_ref() == "56 Dias").unwrap();
+        let Some(StreamProperties::Series(props)) = show.header.additional_properties.as_ref() else {
+            panic!("expected series details");
+        };
+        assert_eq!(props.details.as_ref().unwrap().episodes.as_ref().unwrap().len(), 2);
+        let four_by_four = groups
+            .iter()
+            .flat_map(|group| group.channels.iter())
+            .find(|item| item.header.name.as_ref() == "4x4 Sob Medida")
+            .unwrap();
+        let Some(StreamProperties::Series(props)) = four_by_four.header.additional_properties.as_ref() else {
+            panic!("expected 4x4 series details");
+        };
+        let episode = &props.details.as_ref().unwrap().episodes.as_ref().unwrap()[0];
+        assert_eq!((episode.season, episode.episode_num), (1, 1));
+        let movies = groups.iter().find(|group| group.xtream_cluster == XtreamCluster::Video).unwrap();
+        assert_eq!(movies.channels.len(), 1);
+        assert_eq!(movies.channels[0].header.name.as_ref(), "Filme S01E01");
+    }
+
+    #[tokio::test]
+    async fn m3u_series_category_without_episode_codes_keeps_items_as_ordered_series() {
+        let content = "#EXTM3U\n\
+#EXTINF:-1 group-title=\"Series | Netflix\",Anne com um\n\
+https://example.test/series/one.mp4\n\
+#EXTINF:-1 group-title=\"Series | Netflix\",Anne com um\n\
+https://example.test/series/two.mp4\n";
+
+        let groups = parse_m3u(&Config::default(), &test_input(), make_reader(content)).await;
+        let series_group = groups.iter().find(|group| group.xtream_cluster == XtreamCluster::Series).unwrap();
+        assert_eq!(series_group.title.as_ref(), "Series | Netflix");
+        assert_eq!(series_group.channels.len(), 1);
+        let series = &series_group.channels[0];
+        assert_eq!(series.header.name.as_ref(), "Anne com um");
+        let Some(StreamProperties::Series(props)) = series.header.additional_properties.as_ref() else {
+            panic!("expected fallback series details");
+        };
+        let details = props.details.as_ref().unwrap();
+        let episodes = details.episodes.as_ref().unwrap();
+        assert_eq!(episodes.len(), 2);
+        assert_eq!((episodes[0].season, episodes[0].episode_num), (1, 1));
+        assert_eq!((episodes[1].season, episodes[1].episode_num), (1, 2));
     }
 
     #[tokio::test]

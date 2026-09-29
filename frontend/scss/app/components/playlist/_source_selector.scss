@@ -48,6 +48,26 @@
     }
   }
 
+  &__active-playlist {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--gap-default);
+    padding: var(--padding-small) var(--padding-default);
+    color: var(--text-button-active-color);
+    background-color: var(--text-button-active-background-color);
+    border: 1px solid var(--text-button-active-border-color);
+    border-radius: var(--border-radius);
+
+    span {
+      opacity: 0.85;
+    }
+
+    strong {
+      overflow-wrap: anywhere;
+    }
+  }
+
   &__source-custom-options {
     display: flex;
     flex-flow: row nowrap;
