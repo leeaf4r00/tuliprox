@@ -21,13 +21,15 @@ inputs:
     type: m3u
     enabled: false
     url: "${env:CLDNEW_M3U_URL}"
+  # Optional direct provider playlist. Set BITURL_M3U_URL and enable its input/target before use.
   - name: biturl
     type: m3u
-    enabled: true
+    enabled: false
     url: "${env:BITURL_M3U_URL}"
+  # Optional direct provider playlist. Set FIRETVCB_M3U_URL and enable its input/target before use.
   - name: firetvcb
     type: m3u
-    enabled: true
+    enabled: false
     url: "${env:FIRETVCB_M3U_URL}"
 sources:
   - inputs:
@@ -148,7 +150,7 @@ sources:
       - biturl
     targets:
       - name: biturl
-        enabled: true
+        enabled: false
         output:
           - type: xtream
           - type: m3u
@@ -157,7 +159,7 @@ sources:
       - firetvcb
     targets:
       - name: firetvcb
-        enabled: true
+        enabled: false
         output:
           - type: xtream
           - type: m3u
