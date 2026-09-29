@@ -3,9 +3,24 @@ $movie-card-height: 24rem;
 $movie-card-width: 14rem;
 $live-card-width: 17.5rem;
 $episode-card-height: 13rem;
-$episode-card-width: 14rem;
-$series-backdrop-height: 300px;
+$episode-card-width: 12rem;
+$series-backdrop-height: clamp(12rem, 22vh, 18.75rem);
 $series-backdrop-mobile-height: 150px;
+
+.tp__playlist-explorer-view {
+  flex: 1 1 auto;
+  min-height: 0;
+
+  &__body {
+    flex: 1 1 auto;
+    min-height: 0;
+
+    > .tp__panel {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+  }
+}
 
 @mixin card-base($height, $width) {
   position: relative;
@@ -38,8 +53,13 @@ $series-backdrop-mobile-height: 150px;
 .tp__playlist-explorer {
   display: flex;
   flex-flow: column;
+  flex: 1 1 auto;
   gap: var(--gap-default);
   box-sizing: border-box;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   background-color: var(--card-background-color);
   color: var(--card-color);
@@ -135,8 +155,13 @@ $series-backdrop-mobile-height: 150px;
   &__body {
     display: flex;
     flex-flow: column;
+    flex: 1 1 auto;
     gap: var(--gap-default);
     box-sizing: border-box;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: auto; pointer-events: auto;
     touch-action: pan-x pan-y;
     -webkit-overflow-scrolling: touch;
@@ -215,10 +240,12 @@ $series-backdrop-mobile-height: 150px;
 
       &-episodes {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax($episode-card-width, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, $episode-card-width), 1fr));
         gap: var(--gap-large);
         box-sizing: border-box;
         width: 100%;
+        max-width: 100%;
+        min-width: 0;
       }
     }
   }
@@ -288,15 +315,21 @@ $series-backdrop-mobile-height: 150px;
   &__series-info {
     display: flex;
     flex-flow: column;
+    flex: 1 1 auto;
     gap: var(--gap-default);
     box-sizing: border-box;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
-    align-items: center;
+    align-items: stretch;
 
     &__header {
       display: flex;
       flex-flow: row;
       width: 100%;
+      min-width: 0;
     }
 
     &__rating {
@@ -316,7 +349,10 @@ $series-backdrop-mobile-height: 150px;
       flex: 1 1 auto;
       gap: var(--gap-default);
       box-sizing: border-box;
+      min-height: 0;
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       overflow: auto; pointer-events: auto;
       touch-action: pan-x pan-y;
       -webkit-overflow-scrolling: touch;
