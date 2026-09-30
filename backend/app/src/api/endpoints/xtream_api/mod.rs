@@ -186,16 +186,11 @@ pub(in crate::api) fn get_xtream_player_api_stream_url(
     action_path: &str,
     fallback_url: &Arc<str>,
 ) -> Option<Arc<str>> {
-    // M3U-backed series can be synthesized from episode URLs, so their episode IDs are
-    // Tuliprox target IDs rather than IDs understood by an Xtream-style /series endpoint.
-    // When the target lookup has recovered the original episode URL, stream that URL directly.
-    if context == ApiStreamContext::Series && input.input_type.is_m3u() && !fallback_url.is_empty() {
+    // M3U playback URLs are authoritative for every cluster, including resolved archive
+    // URLs. Playlist account credentials do not imply Xtream playback routes: providers
+    // may omit /live/, use a different extension, or supply a tokenized direct source.
+    if input.input_type.is_m3u() && !fallback_url.is_empty() {
         return Some(Arc::clone(fallback_url));
-    }
-
-    // The resolved M3U archive URL is authoritative for timeshift requests.
-    if context == ApiStreamContext::Timeshift && input.input_type.is_m3u() && !fallback_url.is_empty() {
-        return Some(fallback_url.clone());
     }
 
     if input.input_type.is_media_server() {
