@@ -24,6 +24,7 @@ use yew_hooks::{use_async_with_options, UseAsyncOptions};
 use yew_router::prelude::*;
 
 const STATIC_ASSET_VERSION: &str = env!("CARGO_PKG_VERSION");
+const I18N_ASSET_FINGERPRINT: &str = env!("TULIPROX_I18N_ASSET_FINGERPRINT");
 
 /// App routes
 #[derive(Routable, Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,11 @@ pub fn switch(route: AppRoute) -> Html {
 fn versioned_static_asset_url(path: &str) -> String {
     let separator = if path.contains('?') { '&' } else { '?' };
     format!("{path}{separator}v={STATIC_ASSET_VERSION}")
+}
+
+fn versioned_i18n_asset_url(path: &str) -> String {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}v={STATIC_ASSET_VERSION}-{I18N_ASSET_FINGERPRINT}")
 }
 
 fn versioned_config_url() -> String { versioned_static_asset_url("config.json") }
@@ -82,7 +88,7 @@ pub fn App() -> Html {
         let langs_state = languages_state.clone();
         use_async_with_options::<_, (), Error>(
             async move {
-                let manifest_url = versioned_static_asset_url("assets/i18n/index.json");
+                let manifest_url = versioned_i18n_asset_url("assets/i18n/index.json");
                 let mut languages = match request_get::<LanguageManifest>(&manifest_url, None, None).await {
                     Ok(Some(manifest)) => manifest.languages,
                     _ => Vec::new(),
@@ -100,7 +106,7 @@ pub fn App() -> Html {
                     .map(|lang| {
                         let code = lang.code.clone();
                         async move {
-                            let url = versioned_static_asset_url(&format!("assets/i18n/{code}.json"));
+                            let url = versioned_i18n_asset_url(&format!("assets/i18n/{code}.json"));
                             let result: Result<Option<Value>, Error> = request_get(&url, None, None).await;
                             (code, result)
                         }

@@ -604,6 +604,179 @@ $series-backdrop-mobile-height: 150px;
     object-fit: contain;
   }
 
+  &__video-shell {
+    position: relative;
+    min-width: 0;
+    background: #000;
+  }
+
+  &__video-shell:fullscreen {
+    display: grid;
+    width: 100vw;
+    height: 100vh;
+    place-items: center;
+    overflow: hidden;
+    background: #000;
+
+    > .tp__browser-player__video {
+      width: 100%;
+      height: 100%;
+      max-height: none;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+    }
+  }
+
+  &__fullscreen-toggle {
+    position: absolute;
+    right: 3.5rem;
+    bottom: 0.35rem;
+    z-index: 3;
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    place-items: center;
+    border: 1px solid rgb(255 255 255 / 45%);
+    border-radius: 0.35rem;
+    background: rgb(0 0 0 / 72%);
+    color: #fff;
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: opacity 180ms ease-out, background-color 180ms ease-out;
+
+    &:hover,
+    &:focus-visible {
+      background: rgb(9 22 42 / 95%);
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+  }
+
+  &__video-shell:fullscreen:not(.is-controls-visible) > .tp__browser-player__fullscreen-toggle {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &__fullscreen-navigation {
+    position: absolute;
+    top: var(--gap-default);
+    left: var(--gap-default);
+    z-index: 4;
+    display: flex;
+    max-width: calc(100% - 2 * var(--gap-default));
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--gap-small);
+    padding: var(--padding-small);
+    border: 1px solid rgb(255 255 255 / 22%);
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 88%);
+    color: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-0.25rem);
+    transition: opacity 180ms ease-out, transform 180ms ease-out;
+
+    &.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    button {
+      min-height: 2.5rem;
+      padding: var(--padding-small) var(--padding-default);
+      border: 1px solid #8297af;
+      border-radius: var(--border-radius);
+      background: rgb(9 22 42 / 92%);
+      color: #fff;
+      cursor: pointer;
+
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      &:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 2px;
+      }
+    }
+
+    > span {
+      min-width: 3.5rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tp__browser-player__auto-next {
+      padding: 0 var(--padding-small);
+    }
+  }
+
+  &__next-prompt button {
+    min-height: 2.5rem;
+    padding: var(--padding-small) var(--padding-default);
+    border: 1px solid #8297af;
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 90%);
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 160ms ease-out;
+
+    &:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  }
+
+  &__next-prompt {
+    position: absolute;
+    right: var(--gap-small);
+    bottom: 4rem;
+    left: var(--gap-small);
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--gap-small);
+    padding: var(--padding-small);
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 92%);
+    color: #fff;
+
+    span {
+      flex: 1 1 12rem;
+    }
+  }
+
+  &__auto-next {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-small);
+    cursor: pointer;
+
+    input {
+      accent-color: var(--text-button-primary-background-color);
+    }
+  }
+
+  &__episode-options {
+    display: flex;
+    flex: 1 1 100%;
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--gap-small) var(--gap-default);
+  }
+
   &__layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
@@ -943,6 +1116,7 @@ $series-backdrop-mobile-height: 150px;
     }
   }
 }
+
 
 @media (max-width: 54rem) {
   .tp__browser-player {
