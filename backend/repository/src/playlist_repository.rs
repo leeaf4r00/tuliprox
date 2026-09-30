@@ -19,7 +19,7 @@ use shared::{
         SeriesStreamDetailEpisodeProperties, SeriesStreamDetailProperties, StreamProperties, UUIDType, VirtualId,
         XtreamCluster, XtreamPlaylistItem,
     },
-    utils::{generate_provider_playlist_uuid, get_provider_id, is_dash_url, is_hls_url, Internable},
+    utils::{fnv1a_32_parts, generate_provider_playlist_uuid, get_provider_id, is_dash_url, is_hls_url, Internable},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -644,7 +644,11 @@ fn assign_embedded_provider_series_info_episode_keys(
                 // M3U playlists synthesize episodes inside the series info document instead of
                 // storing a separate PlaylistItem per episode. Give each embedded episode a
                 // target ID so the hosted player can request it through the normal stream route.
-                let provider_id = get_provider_id("", &episode.direct_source).unwrap_or(episode.id);
+                // episode.id is rewritten below, so it cannot identify an episode on subsequent saves.
+                // Match the stable input/URL identity used by the M3U parser for nonnumeric URLs.
+                let provider_id = get_provider_id("", &episode.direct_source).unwrap_or_else(|| {
+                    fnv1a_32_parts(&[channel.header.input_name.as_ref(), episode.direct_source.as_ref()])
+                });
                 let uuid = generate_provider_playlist_uuid(
                     &channel.header.input_name,
                     &provider_id.to_string(),
@@ -1426,7 +1430,8 @@ pub async fn load_input_media_server_playlist(
 #[cfg(test)]
 mod tests {
     use super::{
-        assign_local_series_info_episode_key, assign_media_server_series_info_episode,
+        assign_embedded_provider_series_info_episode_keys, assign_local_series_info_episode_key,
+        assign_media_server_series_info_episode,
         get_input_media_server_playlist_file_path, materialize_media_server_series_info_episodes,
         normalize_target_playlist_epg_ids, persist_playlist_views, persist_playlist_with_mode, playlist_has_items,
         rewrite_local_series_info_episode_virtual_id, rewrite_series_episode_parent_virtual_ids,
@@ -2346,6 +2351,46 @@ mod tests {
                 }))),
                 ..PlaylistItemHeader::default()
             },
+        }
+    }
+
+    #[test]
+    fn embedded_episode_mapping_is_stable_across_repeated_saves() {
+        for url in ["https://provider.example/series/the-episode.mkv", "https://provider.example/series/1234.mkv"] {
+            let dir = tempdir().expect("tempdir");
+            let mapping_path = dir.path().join("id_mapping.db");
+            let mut mapping = TargetIdMapping::new(&mapping_path, false).expect("mapping");
+            let series_uuid = "123e4567-e89b-12d3-a456-426614174099";
+            let mut series_info = make_local_series_info(series_uuid, vec![(1234, "Episode 1", url)]);
+            series_info.header.item_type = PlaylistItemType::SeriesInfo;
+            series_info.header.input_name = "m3u-input".intern();
+            series_info.header.uuid = UUIDType::from_valid_uuid(series_uuid);
+            series_info.header.virtual_id = VirtualId::new(77);
+            let mut playlist = vec![PlaylistGroup {
+                id: 1,
+                title: "Series".intern(),
+                channels: vec![series_info],
+                xtream_cluster: XtreamCluster::Series,
+            }];
+            let episode_id = |playlist: &[PlaylistGroup]| {
+                let Some(StreamProperties::Series(series)) = &playlist[0].channels[0].header.additional_properties else {
+                    panic!("missing series properties");
+                };
+                series.details.as_ref().expect("series details").episodes.as_ref().expect("episodes")[0].id
+            };
+
+            assign_embedded_provider_series_info_episode_keys(&mut playlist, &mut mapping, &HashMap::new());
+            let first_id = episode_id(&playlist);
+            assign_embedded_provider_series_info_episode_keys(&mut playlist, &mut mapping, &HashMap::new());
+            assert_eq!(episode_id(&playlist), first_id);
+            mapping.persist().expect("persist");
+            let mut query = BPlusTreeQuery::<u32, VirtualIdRecord>::try_new(&mapping_path).expect("query");
+            let record = query.query_zero_copy(&first_id).expect("query ok").expect("episode mapping");
+            let expected_provider_id =
+                super::get_provider_id("", url).unwrap_or_else(|| super::fnv1a_32_parts(&["m3u-input", url]));
+            assert_eq!(record.provider_id, expected_provider_id);
+            assert_eq!(record.parent_virtual_id, VirtualId::new(77));
+            assert_eq!(record.item_type, PlaylistItemType::Series);
         }
     }
 
