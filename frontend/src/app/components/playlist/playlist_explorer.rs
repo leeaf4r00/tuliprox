@@ -477,14 +477,27 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
 
     {
         let video_ref = video_ref.clone();
+        let video_shell_ref = video_shell_ref.clone();
         let keyboard_next_episode = keyboard_next_episode.clone();
         use_effect_with((), move |_| {
             let document = web_sys::window().and_then(|window| window.document());
             let listener = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+                if event.ctrl_key() || event.alt_key() || event.meta_key() || event.is_composing() {
+                    return;
+                }
+                if let Some(target) = event.target().and_then(|target| target.dyn_into::<web_sys::Element>().ok()) {
+                    if target.closest("input, select, textarea, [contenteditable]").ok().flatten().is_some() {
+                        return;
+                    }
+                }
                 let is_fullscreen = web_sys::window()
                     .and_then(|window| window.document())
-                    .is_some_and(|document| document.fullscreen_element().is_some());
+                    .and_then(|document| document.fullscreen_element())
+                    .is_some_and(|element| video_shell_ref.cast::<web_sys::Element>().is_some_and(|shell| element == shell));
                 if is_fullscreen && event.key().eq_ignore_ascii_case("n") {
+                    if event.repeat() {
+                        return;
+                    }
                     if let Some(action) = keyboard_next_episode.borrow().clone() {
                         event.prevent_default();
                         action.emit(());
@@ -493,11 +506,6 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 }
                 if event.key() != "ArrowUp" && event.key() != "ArrowDown" {
                     return;
-                }
-                if let Some(target) = event.target().and_then(|target| target.dyn_into::<web_sys::Element>().ok()) {
-                    if matches!(target.tag_name().as_str(), "INPUT" | "SELECT" | "TEXTAREA") {
-                        return;
-                    }
                 }
                 if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
                     event.prevent_default();

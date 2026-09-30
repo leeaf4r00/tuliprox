@@ -654,7 +654,7 @@ $series-backdrop-mobile-height: 150px;
     }
   }
 
-  &__video-shell:fullscreen:not(.is-controls-visible) > .tp__browser-player__fullscreen-toggle {
+  &__video-shell:fullscreen:not(.is-controls-visible) > .tp__browser-player__fullscreen-toggle:not(:focus-visible) {
     opacity: 0;
     pointer-events: none;
   }
@@ -679,7 +679,8 @@ $series-backdrop-mobile-height: 150px;
     transform: translateY(-0.25rem);
     transition: opacity 180ms ease-out, transform 180ms ease-out;
 
-    &.is-visible {
+    &.is-visible,
+    &:focus-within {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
