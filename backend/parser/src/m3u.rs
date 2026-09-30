@@ -51,12 +51,19 @@ fn is_series_category(group: &str) -> bool {
 fn episode_match<'a>(title: &'a str, pattern: &Regex) -> Option<regex::Match<'a>> {
     // A show name may itself look like an episode code (for example "4x4 Sob Medida").
     // The episode marker nearest the end of the title is the actual episode number.
-    pattern.find_iter(title).last()
+    let captures = pattern.captures_iter(title).last()?;
+    // Legacy download patterns wrap the complete title in `.*` and expose the
+    // actual SxxEyy marker as `episode`. Its offset, not the whole match's
+    // offset, separates the show name from the episode code.
+    captures
+        .name("episode")
+        .filter(|episode| episode.as_str().trim().parse::<u32>().is_err())
+        .or_else(|| captures.get(0))
 }
 
 fn parse_series_episode(title: &str, pattern: &Regex) -> Option<(u32, u32)> {
-    let episode_code = episode_match(title, pattern)?;
-    parse_season_episode(&title[episode_code.start()..], pattern)
+    let matched = pattern.find_iter(title).last()?;
+    parse_season_episode(matched.as_str(), pattern)
 }
 
 fn episode_series_name(title: &str, pattern: &Regex) -> Option<Arc<str>> {
@@ -896,6 +903,39 @@ mod test {
             password: Some("pass".to_string()),
             ..ConfigInput::default()
         }
+    }
+
+    #[tokio::test]
+    async fn wrapped_legacy_episode_pattern_groups_show_and_preserves_stream_urls() {
+        let download = shared::model::VideoDownloadConfigDto {
+            episode_pattern: Some(r".*(?P<episode>[Ss]\d{1,2}(.*?)[Ee]\d{1,2}).*".to_string()),
+            ..Default::default()
+        };
+        let video = shared::model::VideoConfigDto {
+            extensions: shared::defaults::default_supported_video_extensions(),
+            download: Some(download),
+            ..Default::default()
+        };
+        let cfg = Config { video: Some((&video).into()), ..Config::default() };
+        let content = "#EXTM3U\n\
+#EXTINF:-1 group-title=\"Series | Amazon Prime Video\",56 Dias S01E01\n\
+http://example.test/series/user/pass/997117.mp4\n\
+#EXTINF:-1 group-title=\"Series | Amazon Prime Video\",56 Dias S01E02\n\
+http://example.test/series/user/pass/997118.mkv\n";
+        let groups = parse_m3u(&cfg, &test_input(), make_reader(content)).await;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].channels.len(), 1, "episode rows must share one series container");
+        let series = &groups[0].channels[0];
+        assert_eq!(series.header.title.as_ref(), "56 Dias");
+        let Some(StreamProperties::Series(props)) = series.header.additional_properties.as_ref() else {
+            panic!("expected series details");
+        };
+        let episodes = props.details.as_ref().unwrap().episodes.as_ref().unwrap();
+        assert_eq!(episodes.len(), 2);
+        assert_eq!((episodes[0].season, episodes[0].episode_num), (1, 1));
+        assert_eq!((episodes[1].season, episodes[1].episode_num), (1, 2));
+        assert_eq!(episodes[0].direct_source.as_ref(), "http://example.test/series/user/pass/997117.mp4");
+        assert_eq!(episodes[1].direct_source.as_ref(), "http://example.test/series/user/pass/997118.mkv");
     }
 
     #[tokio::test]

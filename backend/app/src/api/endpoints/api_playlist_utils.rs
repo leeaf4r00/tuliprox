@@ -64,9 +64,16 @@ pub(in crate::api::endpoints) async fn get_playlist_for_target(
             } else {
                 |_pli: &XtreamPlaylistItem| true
             };
+            let sources = app_state.app_config.sources.load_full();
             let converted_stream = channel_iterator.filter_map(move |entry| match entry {
                 Ok(item) if item_filter(&item) => {
-                    Some(Ok(rewrite_resource_url(&encrypt_secret, &resource_url, UiPlaylistItem::from(item))))
+                    let is_m3u =
+                        sources.get_input_by_name(&item.input_name).is_some_and(|input| input.input_type.is_m3u());
+                    Some(Ok(rewrite_resource_url(
+                        &encrypt_secret,
+                        &resource_url,
+                        UiPlaylistItem::from_target_item(item, is_m3u),
+                    )))
                 }
                 Ok(_) => None,
                 Err(error) => Some(Err(error)),
