@@ -1151,10 +1151,9 @@ https://example.test/series/two.mp4\n";
     }
 
     #[tokio::test]
-    async fn test_series_group_drops_episodes_without_sxxeyy() {
-        // Pin the silent-drop behaviour: an episode whose title has
-        // no SxxEyy token is excluded from the synthesised series
-        // item, while the SxxEyy-tagged sibling survives.
+    async fn test_series_group_preserves_episodes_without_sxxeyy() {
+        // Explicit series entries without an episode code remain playable in
+        // season 1 after the numbered episodes are grouped by their real season.
         let content = r#"#EXTM3U
 #EXTINF:0 tvg-type="series" tvg-id="156988" tvg-logo="https://example.test/poster.jpg" group-title="Example Show Name",Example Show Name S02E05
 https://example.test/series/user/pass/s02e05hash
@@ -1175,9 +1174,15 @@ https://example.test/series/user/pass/pilothash
             }
             _ => panic!("expected Series properties"),
         };
-        assert_eq!(episodes.len(), 1, "the Pilot title has no SxxEyy and is dropped");
-        assert_eq!(episodes[0].episode_num, 5);
-        assert_eq!(episodes[0].season, 2);
+        assert_eq!(episodes.len(), 2, "the unnumbered Pilot must stay playable");
+        assert_eq!((episodes[0].season, episodes[0].episode_num), (1, 1));
+        assert_eq!(episodes[0].title.as_ref(), "Example Show Name Pilot");
+        assert_eq!(
+            episodes[0].direct_source.as_ref(),
+            "https://example.test/series/user/pass/pilothash"
+        );
+        assert_eq!((episodes[1].season, episodes[1].episode_num), (2, 5));
+        assert_eq!(episodes[1].title.as_ref(), "Example Show Name S02E05");
     }
 
     #[tokio::test]
