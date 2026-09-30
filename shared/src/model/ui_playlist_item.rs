@@ -5,6 +5,7 @@ use crate::{
     },
     utils::{arc_str_option_serde, arc_str_serde, Internable, CONSTANTS},
 };
+use regex::Regex;
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::sync::Arc;
 
@@ -41,15 +42,24 @@ pub struct UiPlaylistItem {
 }
 
 impl UiPlaylistItem {
-    pub fn from_target_item(mut item: XtreamPlaylistItem, is_m3u: bool) -> Self {
+    pub fn from_target_item(item: XtreamPlaylistItem, is_m3u: bool) -> Self {
+        Self::from_target_item_with_episode_pattern(item, is_m3u, None)
+    }
+
+    pub fn from_target_item_with_episode_pattern(
+        mut item: XtreamPlaylistItem,
+        is_m3u: bool,
+        episode_pattern: Option<&Regex>,
+    ) -> Self {
         // Legacy M3U caches can contain one SeriesInfo per episode. The folder
         // builder needs the embedded episode ID and URL, not the container ID.
         if is_m3u && item.item_type == PlaylistItemType::SeriesInfo && item.url.is_empty() {
             if let Some(StreamProperties::Series(series)) = item.additional_properties.as_ref() {
                 if let Some(episodes) = series.details.as_ref().and_then(|details| details.episodes.as_ref()) {
                     if let [episode] = episodes.as_slice() {
+                        let episode_pattern = episode_pattern.unwrap_or(&CONSTANTS.re_episode_code);
                         if episode.title == item.title
-                            && CONSTANTS.re_episode_code.is_match(&item.title)
+                            && episode_pattern.is_match(&item.title)
                             && episode.id != 0
                             && !episode.direct_source.is_empty()
                         {
