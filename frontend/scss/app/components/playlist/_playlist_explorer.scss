@@ -604,6 +604,13 @@ $series-backdrop-mobile-height: 150px;
     object-fit: contain;
   }
 
+  // The custom fullscreen toggle keeps episode navigation available. Hide the
+  // browser's duplicate fullscreen button while leaving its timeline and audio
+  // controls intact.
+  &__video::-webkit-media-controls-fullscreen-button {
+    display: none;
+  }
+
   &__video-shell {
     position: relative;
     min-width: 0;
@@ -612,15 +619,22 @@ $series-backdrop-mobile-height: 150px;
 
   &__video-shell:fullscreen {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     width: 100vw;
     height: 100vh;
-    place-items: center;
+    min-width: 0;
+    min-height: 0;
+    place-items: stretch;
     overflow: hidden;
     background: #000;
 
     > .tp__browser-player__video {
       width: 100%;
       height: 100%;
+      min-width: 0;
+      min-height: 0;
+      max-width: 100vw;
       max-height: none;
       aspect-ratio: auto;
       border: 0;
