@@ -1,6 +1,6 @@
 use crate::{
     model::{PlaylistItemType, SearchRequest, StreamProperties, UiPlaylistItem, VirtualId, XtreamCluster},
-    utils::{arc_str_option_serde, arc_str_serde},
+    utils::{arc_str_option_serde, arc_str_serde, format_float_localized},
 };
 use serde::{Deserialize, Serialize};
 use std::{rc::Rc, sync::Arc};
@@ -92,6 +92,7 @@ pub struct UiPlaylistCategories {
 pub const SEARCH_FIELD_GROUP: &str = "group";
 pub const SEARCH_FIELD_TITLE: &str = "title";
 pub const SEARCH_FIELD_NAME: &str = "name";
+pub const SEARCH_FIELD_RATING: &str = "rating";
 pub const SEARCH_FIELD_URL: &str = "url";
 
 #[derive(Debug, Clone, Copy)]
@@ -99,28 +100,30 @@ struct SearchFieldMask {
     group: bool,
     title: bool,
     name: bool,
+    rating: bool,
     url: bool,
 }
 
 impl SearchFieldMask {
     // Legacy scope used when no fields are selected: group title + channel title/name.
-    const DEFAULT: Self = Self { group: true, title: true, name: true, url: false };
+    const DEFAULT: Self = Self { group: true, title: true, name: true, rating: false, url: false };
 
     fn from_search_fields(fields: Option<&Vec<String>>) -> Self {
         let Some(fields) = fields.filter(|f| !f.is_empty()) else {
             return Self::DEFAULT;
         };
-        let mut mask = Self { group: false, title: false, name: false, url: false };
+        let mut mask = Self { group: false, title: false, name: false, rating: false, url: false };
         for field in fields {
             match field.as_str() {
                 SEARCH_FIELD_GROUP => mask.group = true,
                 SEARCH_FIELD_TITLE => mask.title = true,
                 SEARCH_FIELD_NAME => mask.name = true,
+                SEARCH_FIELD_RATING => mask.rating = true,
                 SEARCH_FIELD_URL => mask.url = true,
                 _ => {}
             }
         }
-        if mask.group || mask.title || mask.name || mask.url {
+        if mask.group || mask.title || mask.name || mask.rating || mask.url {
             mask
         } else {
             Self::DEFAULT
@@ -146,6 +149,7 @@ fn filter_channels(
                     .filter(|c| {
                         (mask.title && matches(&c.title))
                             || (mask.name && matches(&c.name))
+                            || (mask.rating && rating_matches(c.rating, matches))
                             || (mask.url && matches(&c.url))
                     })
                     .cloned()
@@ -164,6 +168,15 @@ fn filter_channels(
             })
             .collect::<Vec<_>>()
     })
+}
+
+fn rating_matches(rating: f64, matches: &dyn Fn(&str) -> bool) -> bool {
+    if !rating.is_finite() || rating <= 0.001 {
+        return false;
+    }
+
+    let localized_rating = format_float_localized(rating, 1, false);
+    matches(&localized_rating) || matches(&localized_rating.replace(',', "."))
 }
 
 fn build_result(
@@ -204,5 +217,69 @@ impl UiPlaylistCategories {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{PlaylistItemType, UiPlaylistGroup, XtreamCluster};
+    use std::sync::Arc;
+
+    fn rated_item(title: &str, rating: f64) -> Rc<UiPlaylistItem> {
+        Rc::new(UiPlaylistItem {
+            virtual_id: 1,
+            provider_id: Arc::from("provider-id"),
+            name: Arc::from(title),
+            title: Arc::from(title),
+            group: Arc::from("Movies"),
+            logo: Arc::from(""),
+            url: Arc::from("https://example.test/movie"),
+            item_type: PlaylistItemType::Video,
+            xtream_cluster: XtreamCluster::Video,
+            category_id: 1,
+            rating,
+            input_name: Arc::from("test"),
+            epg_channel_id: None,
+        })
+    }
+
+    fn rated_movies() -> UiPlaylistCategories {
+        UiPlaylistCategories {
+            live: None,
+            vod: Some(vec![Rc::new(UiPlaylistGroup {
+                id: 1,
+                title: Arc::from("Releases"),
+                channels: vec![rated_item("Movie 8.4", 8.4), rated_item("Movie 5.9", 5.9), rated_item("Unrated", 0.0)],
+                xtream_cluster: XtreamCluster::Video,
+            })]),
+            series: None,
+        }
+    }
+
+    #[test]
+    fn rating_search_matches_the_displayed_comma_or_dot_decimal() {
+        let categories = rated_movies();
+
+        for query in ["8,4", "8.4"] {
+            let request = SearchRequest::Text(query.to_string(), Some(Rc::new(vec![SEARCH_FIELD_RATING.to_string()])));
+            let filtered = categories.filter(&request).expect("rating search should return categories");
+            let movies = filtered.vod.expect("VOD cluster should remain present");
+
+            assert_eq!(movies.len(), 1);
+            assert_eq!(movies[0].channels.len(), 1);
+            assert_eq!(movies[0].channels[0].title.as_ref(), "Movie 8.4");
+        }
+    }
+
+    #[test]
+    fn rating_is_not_searched_by_default_or_when_unavailable() {
+        let categories = rated_movies();
+        let request = SearchRequest::Text("8,4".to_string(), None);
+        let filtered = categories.filter(&request).expect("search should return categories");
+
+        assert!(filtered.vod.as_ref().expect("VOD cluster should remain present").is_empty());
+        assert!(!rating_matches(0.0, &|value| value.contains('0')));
+        assert!(!rating_matches(f64::NAN, &|_| true));
     }
 }

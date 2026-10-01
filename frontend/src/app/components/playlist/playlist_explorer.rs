@@ -6,7 +6,8 @@ use crate::{
             recording::{
                 ensure_recording_available, target_name_for_id, PaddingBounds, RecordingForm, RecordingFormPrefill,
             },
-            AppIcon, Chip, DropDownOption, IconButton, NoContent, Panel, Search,
+            AppIcon, Chip, DropDownIconButton, DropDownOption, DropDownSelection, IconButton, NoContent, Panel,
+            Search,
         },
         context::{ConfigContext, PlaylistExplorerContext},
     },
@@ -24,6 +25,7 @@ use shared::{
     utils::{format_float_localized, Internable},
 };
 use std::{
+    cmp::Ordering,
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -61,8 +63,55 @@ extern "C" {
 }
 
 const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
+const TP_EXPLORER_SORT_KEY: &str = "tp-explorer-sort";
 const TP_EXPLORER_FAVORITE_SERIES_KEY: &str = "tp-explorer-favorite-series";
 const TP_EXPLORER_FAVORITE_ITEMS_KEY: &str = "tp-explorer-favorite-items";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaylistExplorerSort {
+    RatingDescending,
+    ProviderOrder,
+}
+
+impl PlaylistExplorerSort {
+    fn from_id(id: &str) -> Self {
+        match id {
+            "provider" => Self::ProviderOrder,
+            _ => Self::RatingDescending,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::RatingDescending => "rating_desc",
+            Self::ProviderOrder => "provider",
+        }
+    }
+}
+
+fn load_playlist_explorer_sort() -> PlaylistExplorerSort {
+    crate::utils::get_local_storage_item(TP_EXPLORER_SORT_KEY)
+        .as_deref()
+        .map(PlaylistExplorerSort::from_id)
+        .unwrap_or(PlaylistExplorerSort::RatingDescending)
+}
+
+fn valid_rating(rating: f64) -> Option<f64> { (rating.is_finite() && rating > 0.001).then_some(rating) }
+
+fn compare_rating_desc(left: f64, right: f64) -> Ordering {
+    match (valid_rating(left), valid_rating(right)) {
+        (Some(left), Some(right)) => right.partial_cmp(&left).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn sort_by_rating<T>(items: &mut [T], sort: PlaylistExplorerSort, rating: impl Fn(&T) -> f64) {
+    if sort == PlaylistExplorerSort::RatingDescending {
+        items.sort_by(|left, right| compare_rating_desc(rating(left), rating(right)));
+    }
+}
 
 fn series_favorite_key(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
@@ -280,6 +329,20 @@ fn build_series_entries(channels: &[Rc<UiPlaylistItem>]) -> Vec<SeriesExplorerEn
     }
 
     entries
+}
+
+fn series_entry_rating(entry: &SeriesExplorerEntry) -> f64 {
+    match entry {
+        SeriesExplorerEntry::Item(channel) => channel.rating,
+        SeriesExplorerEntry::Folder(folder) => folder
+            .seasons
+            .values()
+            .flat_map(|episodes| episodes.iter())
+            .map(|(_, episode)| episode.rating)
+            .filter(|rating| valid_rating(*rating).is_some())
+            .reduce(f64::max)
+            .unwrap_or_default(),
+    }
 }
 
 fn series_episode_display_title(title: &str, series_title: &str) -> String {
@@ -1257,6 +1320,7 @@ pub fn PlaylistExplorer() -> Html {
     let recording_padding = Rc::new(recording_padding);
     let current_item = use_state(|| ExplorerLevel::Categories);
     let playlist = use_state(|| (*context.playlist).clone());
+    let playlist_sort = use_state(load_playlist_explorer_sort);
     let favorite_series = use_state(load_favorite_series);
     let favorite_items = use_state(load_favorite_items);
     let handle_toggle_series_favorite = {
@@ -1328,12 +1392,40 @@ pub fn PlaylistExplorer() -> Html {
                 is_selected(shared::model::SEARCH_FIELD_NAME),
             ),
             DropDownOption::new(
+                shared::model::SEARCH_FIELD_RATING,
+                html! { translate.t("LABEL.RATING") },
+                is_selected(shared::model::SEARCH_FIELD_RATING),
+            ),
+            DropDownOption::new(
                 shared::model::SEARCH_FIELD_URL,
                 html! { translate.t("LABEL.URL") },
                 is_selected(shared::model::SEARCH_FIELD_URL),
             ),
         ]
     });
+    let sort_options = Rc::new(vec![
+        DropDownOption::new(
+            "rating_desc",
+            html! { translate.t("LABEL.SORT_RATING_DESC") },
+            *playlist_sort == PlaylistExplorerSort::RatingDescending,
+        ),
+        DropDownOption::new(
+            "provider",
+            html! { translate.t("LABEL.SORT_SOURCE_ORDER") },
+            *playlist_sort == PlaylistExplorerSort::ProviderOrder,
+        ),
+    ]);
+    let handle_sort_change = {
+        let playlist_sort = playlist_sort.clone();
+        Callback::from(move |(_name, selection): (String, DropDownSelection)| {
+            let DropDownSelection::Single(id) = selection else {
+                return;
+            };
+            let sort = PlaylistExplorerSort::from_id(&id);
+            crate::utils::set_local_storage_item(TP_EXPLORER_SORT_KEY, sort.id());
+            playlist_sort.set(sort);
+        })
+    };
     let handle_search_fields_change = Callback::from(move |fields: Option<Rc<Vec<String>>>| {
         let value = fields.as_ref().map(|f| f.join(",")).unwrap_or_default();
         crate::utils::set_local_storage_item(TP_EXPLORER_SEARCH_FIELDS_KEY, &value);
@@ -2363,9 +2455,12 @@ pub fn PlaylistExplorer() -> Html {
         XtreamCluster::Series => render_series(group, chan),
     };
 
+    let active_sort = *playlist_sort;
     let render_group = |group: &Rc<UiPlaylistGroup>| {
         let channels = if group.xtream_cluster == XtreamCluster::Series {
-            build_series_entries(&group.channels)
+            let mut entries = build_series_entries(&group.channels);
+            sort_by_rating(&mut entries, active_sort, series_entry_rating);
+            entries
                 .into_iter()
                 .map(|entry| match entry {
                     SeriesExplorerEntry::Item(channel) => render_series(group, &channel),
@@ -2373,7 +2468,9 @@ pub fn PlaylistExplorer() -> Html {
                 })
                 .collect::<Html>()
         } else {
-            group.channels.iter().map(|channel| render_channel(group, channel)).collect::<Html>()
+            let mut ordered_channels = group.channels.clone();
+            sort_by_rating(&mut ordered_channels, active_sort, |channel| channel.rating);
+            ordered_channels.iter().map(|channel| render_channel(group, channel)).collect::<Html>()
         };
 
         html! {
@@ -2395,17 +2492,19 @@ pub fn PlaylistExplorer() -> Html {
         let mut favorite_sections = Vec::new();
         let mut rendered_items = HashSet::new();
 
-        let mut live_cards = Vec::new();
+        let mut live_items = Vec::new();
         if let Some(groups) = playlist.as_ref().and_then(|categories| categories.live.as_ref()) {
             for group in groups {
                 for channel in &group.channels {
                     let key = playlist_item_favorite_key(channel);
                     if favorite_items.contains(&key) && rendered_items.insert(key) {
-                        live_cards.push(render_live(channel));
+                        live_items.push(channel.clone());
                     }
                 }
             }
         }
+        sort_by_rating(&mut live_items, active_sort, |channel| channel.rating);
+        let live_cards = live_items.iter().map(render_live).collect::<Vec<_>>();
         if !live_cards.is_empty() {
             favorite_sections.push(html! {
                 <div class="tp__playlist-explorer__favorites-section">
@@ -2417,17 +2516,19 @@ pub fn PlaylistExplorer() -> Html {
             });
         }
 
-        let mut movie_cards = Vec::new();
+        let mut favorite_movies = Vec::new();
         if let Some(groups) = playlist.as_ref().and_then(|categories| categories.vod.as_ref()) {
             for group in groups {
                 for movie in &group.channels {
                     let key = playlist_item_favorite_key(movie);
                     if favorite_items.contains(&key) && rendered_items.insert(key) {
-                        movie_cards.push(render_movie(movie));
+                        favorite_movies.push(movie.clone());
                     }
                 }
             }
         }
+        sort_by_rating(&mut favorite_movies, active_sort, |movie| movie.rating);
+        let movie_cards = favorite_movies.iter().map(render_movie).collect::<Vec<_>>();
         if !movie_cards.is_empty() {
             favorite_sections.push(html! {
                 <div class="tp__playlist-explorer__favorites-section">
@@ -2439,7 +2540,7 @@ pub fn PlaylistExplorer() -> Html {
             });
         }
 
-        let mut series_cards = Vec::new();
+        let mut favorite_series_entries = Vec::new();
         let mut rendered_series = HashSet::new();
         if let Some(groups) = playlist.as_ref().and_then(|categories| categories.series.as_ref()) {
             for group in groups {
@@ -2448,19 +2549,28 @@ pub fn PlaylistExplorer() -> Html {
                         SeriesExplorerEntry::Item(channel) => {
                             let key = series_favorite_key(&channel.title);
                             if favorite_series.contains(&key) && rendered_series.insert(key) {
-                                series_cards.push(render_series(group, &channel));
+                                favorite_series_entries.push((group.clone(), SeriesExplorerEntry::Item(channel)));
                             }
                         }
                         SeriesExplorerEntry::Folder(folder) => {
                             let key = series_favorite_key(&folder.title);
                             if favorite_series.contains(&key) && rendered_series.insert(key) {
-                                series_cards.push(render_series_folder_card(group, Rc::new(folder)));
+                                favorite_series_entries
+                                    .push((group.clone(), SeriesExplorerEntry::Folder(folder)));
                             }
                         }
                     }
                 }
             }
         }
+        sort_by_rating(&mut favorite_series_entries, active_sort, |(_, entry)| series_entry_rating(entry));
+        let series_cards = favorite_series_entries
+            .iter()
+            .map(|(group, entry)| match entry {
+                SeriesExplorerEntry::Item(channel) => render_series(group, channel),
+                SeriesExplorerEntry::Folder(folder) => render_series_folder_card(group, Rc::new(folder.clone())),
+            })
+            .collect::<Vec<_>>();
         if !series_cards.is_empty() {
             favorite_sections.push(html! {
                 <div class="tp__playlist-explorer__favorites-section">
@@ -2635,6 +2745,14 @@ pub fn PlaylistExplorer() -> Html {
                   }
                 </div>
                 <div class="tp__playlist-explorer__header-toolbar-search">
+                  <DropDownIconButton
+                    name="sort-rating"
+                    icon="SortDesc"
+                    class={if active_sort == PlaylistExplorerSort::RatingDescending { "option-active" } else { "" }}
+                    aria_label={translate.t("LABEL.SORT")}
+                    options={sort_options.clone()}
+                    on_select={handle_sort_change.clone()}
+                  />
                   <Search onsearch={handle_search} options={search_fields.clone()} on_fields_change={handle_search_fields_change}/>
                 </div>
             </div>
@@ -2681,8 +2799,9 @@ pub fn PlaylistExplorer() -> Html {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_download_filename, can_show_download_action, can_show_record_action, normalize_input_name,
-        parse_optional_priority_input, ChannelSelection,
+        build_download_filename, can_show_download_action, can_show_record_action, compare_rating_desc,
+        normalize_input_name, parse_optional_priority_input, sort_by_rating, ChannelSelection,
+        PlaylistExplorerSort,
     };
     use shared::model::{VirtualId, XtreamCluster};
 
@@ -2775,5 +2894,25 @@ mod tests {
     fn build_download_filename_falls_back_to_mp4() {
         let filename = build_download_filename("Episode 01", "https://example.com/stream");
         assert_eq!(filename, "Episode_01.mp4");
+    }
+
+    #[test]
+    fn rating_sort_places_highest_first_and_unrated_items_last() {
+        let mut items = vec![("Unrated", 0.0), ("Lower", 5.5), ("Highest", 9.2), ("Middle", 7.0)];
+
+        sort_by_rating(&mut items, PlaylistExplorerSort::RatingDescending, |item| item.1);
+
+        assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), vec!["Highest", "Middle", "Lower", "Unrated"]);
+        assert_eq!(compare_rating_desc(9.2, 5.5), std::cmp::Ordering::Less);
+        assert_eq!(compare_rating_desc(0.0, 5.5), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn provider_order_sort_preserves_the_original_sequence() {
+        let mut items = vec![("Lower", 5.5), ("Highest", 9.2), ("Unrated", 0.0)];
+
+        sort_by_rating(&mut items, PlaylistExplorerSort::ProviderOrder, |item| item.1);
+
+        assert_eq!(items.iter().map(|item| item.0).collect::<Vec<_>>(), vec!["Lower", "Highest", "Unrated"]);
     }
 }

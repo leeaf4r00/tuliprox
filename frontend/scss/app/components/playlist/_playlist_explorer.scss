@@ -126,6 +126,7 @@ $series-backdrop-mobile-height: 150px;
       &-search {
         display: flex;
         flex-flow: row nowrap;
+        gap: var(--gap-small);
         justify-content: center;
         align-items: flex-end;
       }
