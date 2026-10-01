@@ -76,6 +76,24 @@ fn call_browser_method(target: &JsValue, method: &str) {
     let _ = function.call0(target);
 }
 
+fn request_browser_fullscreen(target: &JsValue) {
+    let Ok(value) = js_sys::Reflect::get(target, &JsValue::from_str("requestFullscreen")) else {
+        return;
+    };
+    let Some(function) = value.dyn_ref::<js_sys::Function>() else {
+        return;
+    };
+    let options = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        options.as_ref(),
+        &JsValue::from_str("navigationUI"),
+        &JsValue::from_str("hide"),
+    );
+    let args = js_sys::Array::new();
+    args.push(options.as_ref());
+    let _ = function.apply(target, &args);
+}
+
 fn series_favorite_key(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
@@ -436,7 +454,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     let translate = use_translation();
     let services = use_service_context();
     let video_ref = use_node_ref();
-    let video_shell_ref = use_node_ref();
+    let fullscreen_container_ref = use_node_ref();
     let keyboard_next_episode = use_mut_ref(|| None::<Callback<()>>);
     let is_fullscreen = use_state(|| false);
     let fullscreen_controls_visible = use_state(|| false);
@@ -477,7 +495,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
 
     {
         let video_ref = video_ref.clone();
-        let video_shell_ref = video_shell_ref.clone();
+        let fullscreen_container_ref = fullscreen_container_ref.clone();
         let keyboard_next_episode = keyboard_next_episode.clone();
         use_effect_with((), move |_| {
             let document = web_sys::window().and_then(|window| window.document());
@@ -493,7 +511,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                 let is_fullscreen = web_sys::window()
                     .and_then(|window| window.document())
                     .and_then(|document| document.fullscreen_element())
-                    .is_some_and(|element| video_shell_ref.cast::<web_sys::Element>().is_some_and(|shell| element == shell));
+                    .is_some_and(|element| {
+                        fullscreen_container_ref
+                            .cast::<web_sys::Element>()
+                            .is_some_and(|container| element == container)
+                    });
                 if is_fullscreen && event.key().eq_ignore_ascii_case("n") {
                     if event.repeat() {
                         return;
@@ -542,7 +564,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     .is_some_and(|element| {
                         element
                             .class_list()
-                            .contains("tp__browser-player__video-shell")
+                            .contains("tp__browser-player__main")
                     });
                 is_fullscreen.set(player_is_fullscreen);
                 listener_timeout.borrow_mut().take();
@@ -1210,7 +1232,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     };
 
     let on_toggle_fullscreen = {
-        let video_shell_ref = video_shell_ref.clone();
+        let fullscreen_container_ref = fullscreen_container_ref.clone();
         let fullscreen_controls_visible = fullscreen_controls_visible.clone();
         let fullscreen_controls_timeout = fullscreen_controls_timeout.clone();
         Callback::from(move |_: MouseEvent| {
@@ -1219,8 +1241,8 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             };
             if document.fullscreen_element().is_some() {
                 call_browser_method(document.as_ref(), "exitFullscreen");
-            } else if let Some(shell) = video_shell_ref.cast::<web_sys::Element>() {
-                call_browser_method(shell.as_ref(), "requestFullscreen");
+            } else if let Some(container) = fullscreen_container_ref.cast::<web_sys::Element>() {
+                request_browser_fullscreen(container.as_ref());
             }
             fullscreen_controls_timeout.borrow_mut().take();
             fullscreen_controls_visible.set(true);
@@ -1248,15 +1270,21 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         <div class="tp__browser-player">
             <h2 class="tp__browser-player__title">{(*current_title).clone()}</h2>
             <div class="tp__browser-player__layout">
-              <div class="tp__browser-player__main">
+              <div
+                  ref={fullscreen_container_ref}
+                  class={classes!(
+                      "tp__browser-player__main",
+                      if *is_fullscreen { "is-fullscreen" } else { "" },
+                      if *is_fullscreen && *fullscreen_controls_visible { "is-controls-visible" } else { "" }
+                  )}
+                  onmousemove={on_fullscreen_mouse_move}
+              >
                 <div
-                    ref={video_shell_ref}
                     class={if *is_fullscreen && *fullscreen_controls_visible {
                         "tp__browser-player__video-shell is-controls-visible"
                     } else {
                         "tp__browser-player__video-shell"
                     }}
-                    onmousemove={on_fullscreen_mouse_move}
                 >
                 <video
                     class="tp__browser-player__video"

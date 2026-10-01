@@ -617,7 +617,7 @@ $series-backdrop-mobile-height: 150px;
     background: #000;
   }
 
-  &__video-shell:fullscreen {
+  &__main.is-fullscreen {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -629,7 +629,27 @@ $series-backdrop-mobile-height: 150px;
     overflow: hidden;
     background: #000;
 
-    > .tp__browser-player__video {
+    > .tp__browser-player__video-shell {
+      display: grid;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      place-items: stretch;
+      overflow: hidden;
+      background: #000;
+    }
+
+    > .tp__browser-player__controls {
+      display: none;
+    }
+
+    > .tp__browser-player__hint {
+      display: none;
+    }
+
+    > .tp__browser-player__video-shell > .tp__browser-player__video {
       width: 100%;
       height: 100%;
       min-width: 0;
@@ -668,7 +688,7 @@ $series-backdrop-mobile-height: 150px;
     }
   }
 
-  &__video-shell:fullscreen:not(.is-controls-visible) > .tp__browser-player__fullscreen-toggle:not(:focus-visible) {
+  &__main.is-fullscreen:not(.is-controls-visible) .tp__browser-player__fullscreen-toggle:not(:focus-visible) {
     opacity: 0;
     pointer-events: none;
   }
