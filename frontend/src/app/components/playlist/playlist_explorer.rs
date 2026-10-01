@@ -986,7 +986,17 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         Callback::from(move |_: MouseEvent| next_episode_countdown.set(None))
     };
 
+    let on_video_playing = {
+        let playback_error = playback_error.clone();
+        let is_reconnecting = is_reconnecting.clone();
+        Callback::from(move |_: Event| {
+            playback_error.set(false);
+            is_reconnecting.set(false);
+        })
+    };
     let on_video_time_update = {
+        let playback_error = playback_error.clone();
+        let is_reconnecting = is_reconnecting.clone();
         let resume_key = resume_key.clone();
         let last_saved_position = last_saved_position.clone();
         let recovery_pending = recovery_pending.clone();
@@ -997,6 +1007,16 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             };
             let position = video.current_time();
             let duration = video.duration();
+            // A recovered stream may keep playing buffered data without another
+            // `playing` event. Clear an earlier failure only while playback is healthy.
+            if !video.paused() && video.error().is_none() && video.ready_state() >= 3 && position > 0.0 {
+                if *playback_error {
+                    playback_error.set(false);
+                }
+                if *is_reconnecting {
+                    is_reconnecting.set(false);
+                }
+            }
             let mut last_saved = last_saved_position.borrow_mut();
             if last_saved.0 != resume_key {
                 *last_saved = (resume_key.clone(), 0.0);
@@ -1248,6 +1268,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     preload="metadata"
                     aria-label={(*current_title).clone()}
                     onvolumechange={on_volume_change}
+                    onplaying={on_video_playing}
                     ontimeupdate={on_video_time_update}
                     onpause={on_video_pause}
                     onended={on_video_ended}
