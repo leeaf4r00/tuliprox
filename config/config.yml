@@ -175,15 +175,6 @@ library:
 
   # Metadata configuration
   metadata:
-    # Location to store metadata cache (JSON files)
-    path: "${env:TULIPROX_HOME}/library_metadata"
-
-    # TMDB (The Movie Database) API integration
-    tmdb:
-      enabled: true
-      # api_key: ""  # Get your API key from https://www.themoviedb.org/settings/api
-      rate_limit_ms: 250  # Milliseconds between API calls (default: 250ms)
-
     # Fallback to filename parsing if no metadata found
     fallback_to_filename: true
 
