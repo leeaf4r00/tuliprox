@@ -3,9 +3,24 @@ $movie-card-height: 24rem;
 $movie-card-width: 14rem;
 $live-card-width: 17.5rem;
 $episode-card-height: 13rem;
-$episode-card-width: 14rem;
-$series-backdrop-height: 300px;
+$episode-card-width: 12rem;
+$series-backdrop-height: clamp(12rem, 22vh, 18.75rem);
 $series-backdrop-mobile-height: 150px;
+
+.tp__playlist-explorer-view {
+  flex: 1 1 auto;
+  min-height: 0;
+
+  &__body {
+    flex: 1 1 auto;
+    min-height: 0;
+
+    > .tp__panel {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+  }
+}
 
 @mixin card-base($height, $width) {
   position: relative;
@@ -38,8 +53,13 @@ $series-backdrop-mobile-height: 150px;
 .tp__playlist-explorer {
   display: flex;
   flex-flow: column;
+  flex: 1 1 auto;
   gap: var(--gap-default);
   box-sizing: border-box;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   background-color: var(--card-background-color);
   color: var(--card-color);
@@ -136,8 +156,13 @@ $series-backdrop-mobile-height: 150px;
   &__body {
     display: flex;
     flex-flow: column;
+    flex: 1 1 auto;
     gap: var(--gap-default);
     box-sizing: border-box;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: auto; pointer-events: auto;
     touch-action: pan-x pan-y;
     -webkit-overflow-scrolling: touch;
@@ -216,10 +241,12 @@ $series-backdrop-mobile-height: 150px;
 
       &-episodes {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax($episode-card-width, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, $episode-card-width), 1fr));
         gap: var(--gap-large);
         box-sizing: border-box;
         width: 100%;
+        max-width: 100%;
+        min-width: 0;
       }
     }
   }
@@ -289,15 +316,21 @@ $series-backdrop-mobile-height: 150px;
   &__series-info {
     display: flex;
     flex-flow: column;
+    flex: 1 1 auto;
     gap: var(--gap-default);
     box-sizing: border-box;
+    min-height: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
-    align-items: center;
+    align-items: stretch;
 
     &__header {
       display: flex;
       flex-flow: row;
       width: 100%;
+      min-width: 0;
     }
 
     &__rating {
@@ -317,7 +350,10 @@ $series-backdrop-mobile-height: 150px;
       flex: 1 1 auto;
       gap: var(--gap-default);
       box-sizing: border-box;
+      min-height: 0;
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       overflow: auto; pointer-events: auto;
       touch-action: pan-x pan-y;
       -webkit-overflow-scrolling: touch;
@@ -567,6 +603,214 @@ $series-backdrop-mobile-height: 150px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
     object-fit: contain;
+  }
+
+  // The custom fullscreen toggle keeps episode navigation available. Hide the
+  // browser's duplicate fullscreen button while leaving its timeline and audio
+  // controls intact.
+  &__video::-webkit-media-controls-fullscreen-button {
+    display: none;
+  }
+
+  &__video-shell {
+    position: relative;
+    min-width: 0;
+    background: #000;
+  }
+
+  &__main.is-fullscreen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    width: 100vw;
+    height: 100vh;
+    min-width: 0;
+    min-height: 0;
+    place-items: stretch;
+    overflow: hidden;
+    background: #000;
+
+    > .tp__browser-player__video-shell {
+      display: grid;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      place-items: stretch;
+      overflow: hidden;
+      background: #000;
+    }
+
+    > .tp__browser-player__controls {
+      display: none;
+    }
+
+    > .tp__browser-player__hint {
+      display: none;
+    }
+
+    > .tp__browser-player__video-shell > .tp__browser-player__video {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      max-width: 100vw;
+      max-height: none;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+    }
+  }
+
+  &__fullscreen-toggle {
+    position: absolute;
+    right: 3.5rem;
+    bottom: 0.35rem;
+    z-index: 3;
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    place-items: center;
+    border: 1px solid rgb(255 255 255 / 45%);
+    border-radius: 0.35rem;
+    background: rgb(0 0 0 / 72%);
+    color: #fff;
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: opacity 180ms ease-out, background-color 180ms ease-out;
+
+    &:hover,
+    &:focus-visible {
+      background: rgb(9 22 42 / 95%);
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+  }
+
+  &__main.is-fullscreen:not(.is-controls-visible) .tp__browser-player__fullscreen-toggle:not(:focus-visible) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &__fullscreen-navigation {
+    position: absolute;
+    top: var(--gap-default);
+    left: var(--gap-default);
+    z-index: 4;
+    display: flex;
+    max-width: calc(100% - 2 * var(--gap-default));
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--gap-small);
+    padding: var(--padding-small);
+    border: 1px solid rgb(255 255 255 / 22%);
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 88%);
+    color: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-0.25rem);
+    transition: opacity 180ms ease-out, transform 180ms ease-out;
+
+    &.is-visible,
+    &:focus-within {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    button {
+      min-height: 2.5rem;
+      padding: var(--padding-small) var(--padding-default);
+      border: 1px solid #8297af;
+      border-radius: var(--border-radius);
+      background: rgb(9 22 42 / 92%);
+      color: #fff;
+      cursor: pointer;
+
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      &:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 2px;
+      }
+    }
+
+    > span {
+      min-width: 3.5rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tp__browser-player__auto-next {
+      padding: 0 var(--padding-small);
+    }
+  }
+
+  &__next-prompt button {
+    min-height: 2.5rem;
+    padding: var(--padding-small) var(--padding-default);
+    border: 1px solid #8297af;
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 90%);
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 160ms ease-out;
+
+    &:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  }
+
+  &__next-prompt {
+    position: absolute;
+    right: var(--gap-small);
+    bottom: 4rem;
+    left: var(--gap-small);
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--gap-small);
+    padding: var(--padding-small);
+    border-radius: var(--border-radius);
+    background: rgb(9 22 42 / 92%);
+    color: #fff;
+
+    span {
+      flex: 1 1 12rem;
+    }
+  }
+
+  &__auto-next {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-small);
+    cursor: pointer;
+
+    input {
+      accent-color: var(--text-button-primary-background-color);
+    }
+  }
+
+  &__episode-options {
+    display: flex;
+    flex: 1 1 100%;
+    flex-flow: row wrap;
+    align-items: center;
+    gap: var(--gap-small) var(--gap-default);
   }
 
   &__layout {
@@ -908,6 +1152,7 @@ $series-backdrop-mobile-height: 150px;
     }
   }
 }
+
 
 @media (max-width: 54rem) {
   .tp__browser-player {

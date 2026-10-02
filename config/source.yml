@@ -21,10 +21,12 @@ inputs:
     type: m3u
     enabled: false
     url: "${env:CLDNEW_M3U_URL}"
+  # Active direct provider playlist. Set BITURL_M3U_URL in the local config/.env.
   - name: biturl
     type: m3u
     enabled: true
     url: "${env:BITURL_M3U_URL}"
+  # Active direct provider playlist. Set FIRETVCB_M3U_URL in the local config/.env.
   - name: firetvcb
     type: m3u
     enabled: true

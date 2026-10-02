@@ -1,10 +1,11 @@
 use crate::{
     model::{
-        CommonPlaylistItem, M3uPlaylistItem, PlaylistItem, PlaylistItemType, StreamProperties, XtreamCluster,
-        XtreamPlaylistItem,
+        CommonPlaylistItem, M3uPlaylistItem, PlaylistItem, PlaylistItemType, StreamProperties, VirtualId,
+        XtreamCluster, XtreamPlaylistItem,
     },
-    utils::{arc_str_option_serde, arc_str_serde, Internable},
+    utils::{arc_str_option_serde, arc_str_serde, Internable, CONSTANTS},
 };
+use regex::Regex;
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::sync::Arc;
 
@@ -38,6 +39,40 @@ pub struct UiPlaylistItem {
     // EPG channel identifier for per-stream programme lookup. None when no EPG is configured.
     #[serde(rename = "e", default, skip_serializing_if = "Option::is_none", with = "arc_str_option_serde")]
     pub epg_channel_id: Option<Arc<str>>,
+}
+
+impl UiPlaylistItem {
+    pub fn from_target_item(item: XtreamPlaylistItem, is_m3u: bool) -> Self {
+        Self::from_target_item_with_episode_pattern(item, is_m3u, None)
+    }
+
+    pub fn from_target_item_with_episode_pattern(
+        mut item: XtreamPlaylistItem,
+        is_m3u: bool,
+        episode_pattern: Option<&Regex>,
+    ) -> Self {
+        // Legacy M3U caches can contain one SeriesInfo per episode. The folder
+        // builder needs the embedded episode ID and URL, not the container ID.
+        if is_m3u && item.item_type == PlaylistItemType::SeriesInfo && item.url.is_empty() {
+            if let Some(StreamProperties::Series(series)) = item.additional_properties.as_ref() {
+                if let Some(episodes) = series.details.as_ref().and_then(|details| details.episodes.as_ref()) {
+                    if let [episode] = episodes.as_slice() {
+                        let episode_pattern = episode_pattern.unwrap_or(&CONSTANTS.re_episode_code);
+                        if episode.title == item.title
+                            && episode_pattern.is_match(&item.title)
+                            && episode.id != 0
+                            && !episode.direct_source.is_empty()
+                        {
+                            item.virtual_id = VirtualId::new(episode.id);
+                            item.item_type = PlaylistItemType::Series;
+                            item.url = Arc::clone(&episode.direct_source);
+                        }
+                    }
+                }
+            }
+        }
+        Self::from(item)
+    }
 }
 
 /// Helper to pick the best logo: prefer `logo` if non-empty, else `logo_small`
@@ -161,5 +196,97 @@ impl From<&PlaylistItem> for UiPlaylistItem {
             input_name: Arc::clone(&header.input_name),
             epg_channel_id: header.epg_channel_id.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UiPlaylistItem;
+    use crate::model::{
+        PlaylistItem, PlaylistItemHeader, PlaylistItemType, SeriesStreamDetailEpisodeProperties,
+        SeriesStreamDetailProperties, SeriesStreamProperties, StreamProperties, VirtualId, XtreamCluster,
+        XtreamPlaylistItem,
+    };
+    use crate::utils::Internable;
+
+    fn legacy_episode_container() -> XtreamPlaylistItem {
+        let properties = SeriesStreamProperties {
+            details: Some(SeriesStreamDetailProperties {
+                year: None,
+                seasons: None,
+                episodes: Some(vec![SeriesStreamDetailEpisodeProperties {
+                    id: 18478,
+                    title: "56 Dias S01E01".intern(),
+                    direct_source: "http://example.test/series/user/pass/997117.mp4".intern(),
+                    season: 1,
+                    episode_num: 1,
+                    ..Default::default()
+                }]),
+            }),
+            ..Default::default()
+        };
+        XtreamPlaylistItem::from(&PlaylistItem {
+            header: PlaylistItemHeader {
+                virtual_id: VirtualId::new(18477),
+                title: "56 Dias S01E01".intern(),
+                item_type: PlaylistItemType::SeriesInfo,
+                xtream_cluster: XtreamCluster::Series,
+                additional_properties: Some(StreamProperties::Series(Box::new(properties))),
+                ..Default::default()
+            },
+        })
+    }
+
+    #[test]
+    fn target_m3u_cached_episode_uses_playable_id_and_original_url() {
+        let item = UiPlaylistItem::from_target_item(legacy_episode_container(), true);
+        assert_eq!(item.virtual_id, 18478);
+        assert_eq!(item.item_type, PlaylistItemType::Series);
+        assert_eq!(item.url.as_ref(), "http://example.test/series/user/pass/997117.mp4");
+        assert_eq!(item.title.as_ref(), "56 Dias S01E01");
+    }
+
+    #[test]
+    fn target_xtream_containers_are_not_flattened() {
+        let item = UiPlaylistItem::from_target_item(legacy_episode_container(), false);
+        assert_eq!(item.virtual_id, 18477);
+        assert_eq!(item.item_type, PlaylistItemType::SeriesInfo);
+        assert!(item.url.is_empty());
+    }
+
+    #[test]
+    fn target_m3u_real_single_episode_show_keeps_container_identity() {
+        let mut container = legacy_episode_container();
+        container.title = "56 Dias".intern();
+        let item = UiPlaylistItem::from_target_item(container, true);
+        assert_eq!(item.virtual_id, 18477);
+        assert_eq!(item.item_type, PlaylistItemType::SeriesInfo);
+        assert!(item.url.is_empty());
+    }
+
+    #[test]
+    fn target_m3u_container_with_missing_source_keeps_container_identity() {
+        let mut container = legacy_episode_container();
+        if let Some(StreamProperties::Series(series)) = container.additional_properties.as_mut() {
+            series.details.as_mut().unwrap().episodes.as_mut().unwrap()[0].direct_source = "".intern();
+        }
+        let item = UiPlaylistItem::from_target_item(container, true);
+        assert_eq!(item.virtual_id, 18477);
+        assert_eq!(item.item_type, PlaylistItemType::SeriesInfo);
+    }
+
+    #[test]
+    fn target_m3u_multi_episode_container_keeps_container_identity() {
+        let mut container = legacy_episode_container();
+        if let Some(StreamProperties::Series(series)) = container.additional_properties.as_mut() {
+            let episodes = series.details.as_mut().unwrap().episodes.as_mut().unwrap();
+            let mut second = episodes[0].clone();
+            second.id = 18480;
+            second.title = "56 Dias S01E02".intern();
+            episodes.push(second);
+        }
+        let item = UiPlaylistItem::from_target_item(container, true);
+        assert_eq!(item.virtual_id, 18477);
+        assert_eq!(item.item_type, PlaylistItemType::SeriesInfo);
     }
 }

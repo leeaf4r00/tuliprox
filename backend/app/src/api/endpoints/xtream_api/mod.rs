@@ -186,9 +186,11 @@ pub(in crate::api) fn get_xtream_player_api_stream_url(
     action_path: &str,
     fallback_url: &Arc<str>,
 ) -> Option<Arc<str>> {
-    // The resolved M3U archive URL is authoritative for timeshift requests.
-    if context == ApiStreamContext::Timeshift && input.input_type.is_m3u() && !fallback_url.is_empty() {
-        return Some(fallback_url.clone());
+    // M3U playback URLs are authoritative for every cluster, including resolved archive
+    // URLs. Playlist account credentials do not imply Xtream playback routes: providers
+    // may omit /live/, use a different extension, or supply a tokenized direct source.
+    if input.input_type.is_m3u() && !fallback_url.is_empty() {
+        return Some(Arc::clone(fallback_url));
     }
 
     if input.input_type.is_media_server() {
@@ -1036,6 +1038,24 @@ pub(in crate::api) async fn xtream_player_api_stream_with_resolved_target(
                 stream_req.context, virtual_id
             )
         );
+
+        // The web player uses an internal access token and bypasses the normal
+        // Xtream endpoint's redirect handling. Honor the target's forced
+        // redirect setting here as well, so browser playback can fetch the
+        // provider stream directly when the server cannot reach that origin.
+        if target.is_force_redirect(pli.item_type) {
+            return match api_utils::resolve_redirect_location(Some(&input), &stream_url) {
+                Ok(redirect_url) => {
+                    resource_redirect_or_proxy(app_state, redirect_url.as_ref(), req_headers, Some(&input))
+                        .await
+                        .into_response()
+                }
+                Err(err) => {
+                    error!("Failed to resolve webplayer redirect url: {}", sanitize_sensitive_info(&err.to_string()));
+                    axum::http::StatusCode::BAD_REQUEST.into_response()
+                }
+            };
+        }
 
         trace_if_enabled!("Streaming stream request from {}", sanitize_sensitive_info(&stream_url));
         let download_extension = extract_extension_from_url(&pli.url).map(str::to_owned);

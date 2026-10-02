@@ -52,6 +52,11 @@ pub(in crate::api::endpoints) async fn get_playlist_for_target(
     let config = app_state.app_config.config.load();
     let web_ui_path = config.web_ui.as_ref().and_then(|w| w.path.as_ref()).map_or("", String::as_str);
     let resource_url = concat_path_leading_slash(web_ui_path, "api/v1/playlist/resource");
+    let episode_pattern = config
+        .video
+        .as_ref()
+        .and_then(|video| video.download.as_ref())
+        .and_then(|download| download.episode_pattern.clone());
     let encrypt_secret = app_state.get_encrypt_secret();
     if let Some(target) = cfg_target {
         if target.has_output(TargetType::Xtream) {
@@ -64,9 +69,20 @@ pub(in crate::api::endpoints) async fn get_playlist_for_target(
             } else {
                 |_pli: &XtreamPlaylistItem| true
             };
+            let sources = app_state.app_config.sources.load_full();
             let converted_stream = channel_iterator.filter_map(move |entry| match entry {
                 Ok(item) if item_filter(&item) => {
-                    Some(Ok(rewrite_resource_url(&encrypt_secret, &resource_url, UiPlaylistItem::from(item))))
+                    let is_m3u =
+                        sources.get_input_by_name(&item.input_name).is_some_and(|input| input.input_type.is_m3u());
+                    Some(Ok(rewrite_resource_url(
+                        &encrypt_secret,
+                        &resource_url,
+                        UiPlaylistItem::from_target_item_with_episode_pattern(
+                            item,
+                            is_m3u,
+                            episode_pattern.as_deref(),
+                        ),
+                    )))
                 }
                 Ok(_) => None,
                 Err(error) => Some(Err(error)),

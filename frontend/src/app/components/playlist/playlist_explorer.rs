@@ -32,8 +32,9 @@ use std::{
     rc::Rc,
     str::FromStr,
 };
+use gloo_timers::callback::Timeout;
 use wasm_bindgen::{closure::Closure, JsCast, JsValue};
-use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlVideoElement};
+use web_sys::{HtmlInputElement, HtmlSelectElement, HtmlVideoElement, KeyboardEvent};
 use yew::{platform::spawn_local, prelude::*};
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -66,6 +67,35 @@ const TP_EXPLORER_SEARCH_FIELDS_KEY: &str = "tp-explorer-search-fields";
 const TP_EXPLORER_SORT_KEY: &str = "tp-explorer-sort";
 const TP_EXPLORER_FAVORITE_SERIES_KEY: &str = "tp-explorer-favorite-series";
 const TP_EXPLORER_FAVORITE_ITEMS_KEY: &str = "tp-explorer-favorite-items";
+const TP_PLAYER_AUTO_NEXT_KEY: &str = "tp-player-auto-next";
+
+fn call_browser_method(target: &JsValue, method: &str) {
+    let Ok(value) = js_sys::Reflect::get(target, &JsValue::from_str(method)) else {
+        return;
+    };
+    let Some(function) = value.dyn_ref::<js_sys::Function>() else {
+        return;
+    };
+    let _ = function.call0(target);
+}
+
+fn request_browser_fullscreen(target: &JsValue) {
+    let Ok(value) = js_sys::Reflect::get(target, &JsValue::from_str("requestFullscreen")) else {
+        return;
+    };
+    let Some(function) = value.dyn_ref::<js_sys::Function>() else {
+        return;
+    };
+    let options = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        options.as_ref(),
+        &JsValue::from_str("navigationUI"),
+        &JsValue::from_str("hide"),
+    );
+    let args = js_sys::Array::new();
+    args.push(options.as_ref());
+    let _ = function.apply(target, &args);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PlaylistExplorerSort {
@@ -272,16 +302,63 @@ enum SeriesExplorerEntry {
     Item(Rc<UiPlaylistItem>),
 }
 
+fn repeated_series_title_before_season(title: &str, season: u32) -> Option<String> {
+    let bytes = title.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if !matches!(byte, b's' | b'S') || (index > 0 && bytes[index - 1].is_ascii_alphanumeric()) {
+            continue;
+        }
+
+        let digits_start = index + 1;
+        let mut digits_end = digits_start;
+        while digits_end < bytes.len() && bytes[digits_end].is_ascii_digit() {
+            digits_end += 1;
+        }
+        if digits_end == digits_start
+            || digits_end - digits_start > 2
+            || (digits_end < bytes.len() && bytes[digits_end].is_ascii_alphanumeric())
+            || title[digits_start..digits_end].parse::<u32>().ok() != Some(season)
+        {
+            continue;
+        }
+
+        let left = title[..index]
+            .trim_end_matches(|character: char| {
+                character.is_whitespace() || matches!(character, '-' | '_' | '.' | ':' | '|')
+            })
+            .trim();
+        let right = title[digits_end..]
+            .trim_start_matches(|character: char| {
+                character.is_whitespace() || matches!(character, '-' | '_' | '.' | ':' | '|')
+            })
+            .trim();
+        let normalize = |value: &str| {
+            value
+                .chars()
+                .filter(|character| character.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        };
+
+        if !left.is_empty() && normalize(left) == normalize(right) {
+            return Some(left.to_string());
+        }
+    }
+    None
+}
+
 fn parse_series_episode_title(title: &str) -> Option<(String, u32, u32)> {
     let pattern = &shared::utils::CONSTANTS.re_episode_code;
-    let matched = pattern.captures(title)?.get(0)?;
-    let (season, episode) = shared::utils::parse_season_episode(title, pattern)?;
+    let matched = pattern.find_iter(title).last()?;
+    let (season, episode) = shared::utils::parse_season_episode(&title[matched.start()..], pattern)?;
     let series_title = title
         .get(..matched.start())?
         .trim_end_matches(|character: char| {
             character.is_whitespace() || matches!(character, '-' | '_' | '.' | ':' | '|')
         })
         .trim();
+    let repeated_title = repeated_series_title_before_season(series_title, season);
+    let series_title = repeated_title.as_deref().unwrap_or(series_title);
 
     (!series_title.is_empty()).then(|| (series_title.to_string(), season, episode))
 }
@@ -441,6 +518,11 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
     let translate = use_translation();
     let services = use_service_context();
     let video_ref = use_node_ref();
+    let fullscreen_container_ref = use_node_ref();
+    let keyboard_next_episode = use_mut_ref(|| None::<Callback<()>>);
+    let is_fullscreen = use_state(|| false);
+    let fullscreen_controls_visible = use_state(|| false);
+    let fullscreen_controls_timeout = use_mut_ref(|| None::<Timeout>);
     let playback_error = use_state(|| false);
     let is_reconnecting = use_state(|| false);
     let pending_resume_position = use_state(|| None::<f64>);
@@ -464,6 +546,8 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         .unwrap_or_default();
     let current_episode_index = use_state(|| initial_episode_index);
     let switching_episode = use_state(|| false);
+    let auto_next = use_state(|| crate::utils::get_local_storage_item(TP_PLAYER_AUTO_NEXT_KEY).as_deref() != Some("false"));
+    let next_episode_countdown = use_state(|| None::<u8>);
     let downloading_episode = use_state(|| false);
     let saved_resume_position = use_state(|| 0.0_f64);
     let resume_key = props
@@ -472,6 +556,99 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         .map(|episode| browser_player_resume_key(episode.virtual_id, &episode.title))
         .unwrap_or_else(|| browser_player_resume_key(current_episode_id.unwrap_or_default(), &current_title));
     let last_saved_position = use_mut_ref(|| (resume_key.clone(), 0.0_f64));
+
+    {
+        let video_ref = video_ref.clone();
+        let fullscreen_container_ref = fullscreen_container_ref.clone();
+        let keyboard_next_episode = keyboard_next_episode.clone();
+        use_effect_with((), move |_| {
+            let document = web_sys::window().and_then(|window| window.document());
+            let listener = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+                if event.ctrl_key() || event.alt_key() || event.meta_key() || event.is_composing() {
+                    return;
+                }
+                if let Some(target) = event.target().and_then(|target| target.dyn_into::<web_sys::Element>().ok()) {
+                    if target.closest("input, select, textarea, [contenteditable]").ok().flatten().is_some() {
+                        return;
+                    }
+                }
+                let is_fullscreen = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.fullscreen_element())
+                    .is_some_and(|element| {
+                        fullscreen_container_ref
+                            .cast::<web_sys::Element>()
+                            .is_some_and(|container| element == container)
+                    });
+                if is_fullscreen && event.key().eq_ignore_ascii_case("n") {
+                    if event.repeat() {
+                        return;
+                    }
+                    if let Some(action) = keyboard_next_episode.borrow().clone() {
+                        event.prevent_default();
+                        action.emit(());
+                    }
+                    return;
+                }
+                if event.key() != "ArrowUp" && event.key() != "ArrowDown" {
+                    return;
+                }
+                if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
+                    event.prevent_default();
+                    let delta = if event.key() == "ArrowUp" { 0.05 } else { -0.05 };
+                    video.set_volume((video.volume() + delta).clamp(0.0, 1.0));
+                    if video.volume() > 0.0 && video.muted() {
+                        video.set_muted(false);
+                    }
+                }
+            });
+            if let Some(document) = document.as_ref() {
+                let _ = document.add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
+            }
+            move || {
+                if let Some(document) = document.as_ref() {
+                    let _ = document.remove_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
+                }
+            }
+        });
+    }
+
+    {
+        let is_fullscreen = is_fullscreen.clone();
+        let fullscreen_controls_visible = fullscreen_controls_visible.clone();
+        let fullscreen_controls_timeout = fullscreen_controls_timeout.clone();
+        use_effect_with((), move |_| {
+            let document = web_sys::window().and_then(|window| window.document());
+            let listener_document = document.clone();
+            let listener_timeout = fullscreen_controls_timeout.clone();
+            let listener = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+                let player_is_fullscreen = listener_document
+                    .as_ref()
+                    .and_then(|document| document.fullscreen_element())
+                    .is_some_and(|element| {
+                        element
+                            .class_list()
+                            .contains("tp__browser-player__main")
+                    });
+                is_fullscreen.set(player_is_fullscreen);
+                listener_timeout.borrow_mut().take();
+                fullscreen_controls_visible.set(player_is_fullscreen);
+                if player_is_fullscreen {
+                    let visible = fullscreen_controls_visible.clone();
+                    *listener_timeout.borrow_mut() = Some(Timeout::new(3_000, move || visible.set(false)));
+                }
+            });
+            if let Some(document) = document.as_ref() {
+                let _ = document.add_event_listener_with_callback("fullscreenchange", listener.as_ref().unchecked_ref());
+            }
+            move || {
+                if let Some(document) = document.as_ref() {
+                    let _ = document.remove_event_listener_with_callback("fullscreenchange", listener.as_ref().unchecked_ref());
+                }
+                fullscreen_controls_timeout.borrow_mut().take();
+            }
+        });
+    }
 
     {
         let saved_resume_position = saved_resume_position.clone();
@@ -717,6 +894,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         let current_episode_id = current_episode_id.clone();
         let current_episode_index = current_episode_index.clone();
         let switching_episode = switching_episode.clone();
+        let next_episode_countdown = next_episode_countdown.clone();
         let current_virtual_id = current_virtual_id.clone();
         let current_source_url = current_source_url.clone();
         let recovery_pending = recovery_pending.clone();
@@ -733,6 +911,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             };
 
             switching_episode.set(true);
+            next_episode_countdown.set(None);
             playback_error.set(false);
             if let Some(video) = video_ref.cast::<HtmlVideoElement>() {
                 let _ = video.pause();
@@ -834,18 +1013,76 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             }
         })
     };
-    let on_video_ended = {
+    {
         let on_select_episode = on_select_episode.clone();
-        let resume_key = resume_key.clone();
-        Callback::from(move |_: Event| {
-            crate::utils::remove_local_storage_item(&resume_key);
+        *keyboard_next_episode.borrow_mut() = Some(Callback::from(move |_: ()| {
             if let Some(index) = next_episode_index {
                 on_select_episode.emit(index);
             }
+        }));
+    }
+    let on_video_ended = {
+        let next_episode_countdown = next_episode_countdown.clone();
+        let auto_next = auto_next.clone();
+        let resume_key = resume_key.clone();
+        Callback::from(move |_: Event| {
+            crate::utils::remove_local_storage_item(&resume_key);
+            if *auto_next && next_episode_index.is_some() {
+                next_episode_countdown.set(Some(3));
+            }
         })
     };
+    {
+        let next_episode_countdown = next_episode_countdown.clone();
+        let on_select_episode = on_select_episode.clone();
+        use_effect_with((*next_episode_countdown, *current_episode_index, *auto_next), move |(remaining, index, enabled)| {
+            let timer = if *enabled {
+                remaining.map(|seconds| {
+                    let next_episode_countdown = next_episode_countdown.clone();
+                    let on_select_episode = on_select_episode.clone();
+                    let next_index = *index + 1;
+                    Timeout::new(1_000, move || {
+                        if seconds == 1 {
+                            on_select_episode.emit(next_index);
+                        } else {
+                            next_episode_countdown.set(Some(seconds - 1));
+                        }
+                    })
+                })
+            } else {
+                None
+            };
+            move || drop(timer)
+        });
+    }
+    let on_toggle_auto_next = {
+        let auto_next = auto_next.clone();
+        let next_episode_countdown = next_episode_countdown.clone();
+        Callback::from(move |_: Event| {
+            let enabled = !*auto_next;
+            crate::utils::set_local_storage_item(TP_PLAYER_AUTO_NEXT_KEY, if enabled { "true" } else { "false" });
+            auto_next.set(enabled);
+            if !enabled {
+                next_episode_countdown.set(None);
+            }
+        })
+    };
+    let on_cancel_next_episode = {
+        let next_episode_countdown = next_episode_countdown.clone();
+        Callback::from(move |_: MouseEvent| next_episode_countdown.set(None))
+    };
 
+    let on_video_playing = {
+        let playback_error = playback_error.clone();
+        let is_reconnecting = is_reconnecting.clone();
+        Callback::from(move |_: Event| {
+            playback_error.set(false);
+            is_reconnecting.set(false);
+        })
+    };
     let on_video_time_update = {
+        let playback_error = playback_error.clone();
+        let is_reconnecting = is_reconnecting.clone();
         let resume_key = resume_key.clone();
         let last_saved_position = last_saved_position.clone();
         let recovery_pending = recovery_pending.clone();
@@ -856,6 +1093,16 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             };
             let position = video.current_time();
             let duration = video.duration();
+            // A recovered stream may keep playing buffered data without another
+            // `playing` event. Clear an earlier failure only while playback is healthy.
+            if !video.paused() && video.error().is_none() && video.ready_state() >= 3 && position > 0.0 {
+                if *playback_error {
+                    playback_error.set(false);
+                }
+                if *is_reconnecting {
+                    is_reconnecting.set(false);
+                }
+            }
             let mut last_saved = last_saved_position.borrow_mut();
             if last_saved.0 != resume_key {
                 *last_saved = (resume_key.clone(), 0.0);
@@ -1050,25 +1297,129 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         })
     };
 
+    let on_toggle_fullscreen = {
+        let fullscreen_container_ref = fullscreen_container_ref.clone();
+        let fullscreen_controls_visible = fullscreen_controls_visible.clone();
+        let fullscreen_controls_timeout = fullscreen_controls_timeout.clone();
+        Callback::from(move |_: MouseEvent| {
+            let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+                return;
+            };
+            if document.fullscreen_element().is_some() {
+                call_browser_method(document.as_ref(), "exitFullscreen");
+            } else if let Some(container) = fullscreen_container_ref.cast::<web_sys::Element>() {
+                request_browser_fullscreen(container.as_ref());
+            }
+            fullscreen_controls_timeout.borrow_mut().take();
+            fullscreen_controls_visible.set(true);
+            let visible = fullscreen_controls_visible.clone();
+            *fullscreen_controls_timeout.borrow_mut() = Some(Timeout::new(3_000, move || visible.set(false)));
+        })
+    };
+
+    let on_fullscreen_mouse_move = {
+        let is_fullscreen = is_fullscreen.clone();
+        let fullscreen_controls_visible = fullscreen_controls_visible.clone();
+        let fullscreen_controls_timeout = fullscreen_controls_timeout.clone();
+        Callback::from(move |_: MouseEvent| {
+            if !*is_fullscreen {
+                return;
+            }
+            fullscreen_controls_timeout.borrow_mut().take();
+            fullscreen_controls_visible.set(true);
+            let visible = fullscreen_controls_visible.clone();
+            *fullscreen_controls_timeout.borrow_mut() = Some(Timeout::new(2_500, move || visible.set(false)));
+        })
+    };
+
     html! {
         <div class="tp__browser-player">
             <h2 class="tp__browser-player__title">{(*current_title).clone()}</h2>
             <div class="tp__browser-player__layout">
-              <div class="tp__browser-player__main">
+              <div
+                  ref={fullscreen_container_ref}
+                  class={classes!(
+                      "tp__browser-player__main",
+                      if *is_fullscreen { "is-fullscreen" } else { "" },
+                      if *is_fullscreen && *fullscreen_controls_visible { "is-controls-visible" } else { "" }
+                  )}
+                  onmousemove={on_fullscreen_mouse_move}
+              >
+                <div
+                    class={if *is_fullscreen && *fullscreen_controls_visible {
+                        "tp__browser-player__video-shell is-controls-visible"
+                    } else {
+                        "tp__browser-player__video-shell"
+                    }}
+                >
                 <video
                     class="tp__browser-player__video"
                     ref={video_ref}
                     controls=true
+                    controlslist="nofullscreen"
                     autoplay=true
                     playsinline=true
                     preload="metadata"
                     aria-label={(*current_title).clone()}
                     onvolumechange={on_volume_change}
+                    onplaying={on_video_playing}
                     ontimeupdate={on_video_time_update}
                     onpause={on_video_pause}
                     onended={on_video_ended}
                 />
+                <button
+                    type="button"
+                    class="tp__browser-player__fullscreen-toggle"
+                    title={translate.t("MESSAGES.PLAYBACK.TOGGLE_FULLSCREEN")}
+                    aria-label={translate.t("MESSAGES.PLAYBACK.TOGGLE_FULLSCREEN")}
+                    onclick={on_toggle_fullscreen}
+                >{"⛶"}</button>
+                {if *is_fullscreen && props.episodes.len() > 1 {
+                    html! {
+                        <nav
+                            class={classes!("tp__browser-player__fullscreen-navigation", if *fullscreen_controls_visible { "is-visible" } else { "" })}
+                            aria-label={translate.t("MESSAGES.PLAYBACK.EPISODE_NAVIGATION")}
+                        >
+                            <button
+                                type="button"
+                                disabled={previous_episode_index.is_none() || *switching_episode}
+                                onclick={on_previous_episode.clone()}
+                            >{translate.t("MESSAGES.PLAYBACK.PREVIOUS_EPISODE")}</button>
+                            <span>{format!("{} / {}", *current_episode_index + 1, props.episodes.len())}</span>
+                            <button
+                                type="button"
+                                disabled={next_episode_index.is_none() || *switching_episode}
+                                onclick={on_next_episode.clone()}
+                            >{translate.t("MESSAGES.PLAYBACK.NEXT_EPISODE")}</button>
+                            <label class="tp__browser-player__auto-next">
+                                <input type="checkbox" checked={*auto_next} onchange={on_toggle_auto_next.clone()} />
+                                <span>{translate.t("MESSAGES.PLAYBACK.AUTO_NEXT_EPISODE")}</span>
+                            </label>
+                        </nav>
+                    }
+                } else { Html::default() }}
+                {if let (Some(seconds), Some(index)) = (*next_episode_countdown, next_episode_index) {
+                    html! {
+                        <div class="tp__browser-player__next-prompt" role="status">
+                            <span>{format!("{}: {} ({} s)", translate.t("MESSAGES.PLAYBACK.NEXT_EPISODE"), props.episodes[index].title, seconds)}</span>
+                            <button type="button" onclick={on_next_episode.clone()}>{translate.t("MESSAGES.PLAYBACK.PLAY_NOW")}</button>
+                            <button type="button" onclick={on_cancel_next_episode.clone()}>{translate.t("MESSAGES.PLAYBACK.CANCEL_AUTO_NEXT")}</button>
+                        </div>
+                    }
+                } else { Html::default() }}
+                </div>
                 <div class="tp__browser-player__controls" aria-label={translate.t("MESSAGES.PLAYBACK.CONTROLS")}>
+                {if props.episodes.len() > 1 {
+                    html! {
+                        <div class="tp__browser-player__episode-options">
+                            <label class="tp__browser-player__auto-next">
+                                <input type="checkbox" checked={*auto_next} onchange={on_toggle_auto_next} />
+                                <span>{translate.t("MESSAGES.PLAYBACK.AUTO_NEXT_EPISODE")}</span>
+                            </label>
+                            <p class="tp__browser-player__hint">{translate.t("MESSAGES.PLAYBACK.NEXT_EPISODE_SHORTCUT")}</p>
+                        </div>
+                    }
+                } else { Html::default() }}
                 <div class="tp__browser-player__volume">
                     <label for="tp-player-volume">{translate.t("MESSAGES.PLAYBACK.VOLUME")}</label>
                     <input
@@ -2804,10 +3155,35 @@ pub fn PlaylistExplorer() -> Html {
 mod tests {
     use super::{
         build_download_filename, can_show_download_action, can_show_record_action, compare_rating_desc,
-        normalize_input_name, parse_optional_priority_input, sort_by_rating, ChannelSelection,
-        PlaylistExplorerSort,
+        normalize_input_name, parse_optional_priority_input, parse_series_episode_title, sort_by_rating,
+        ChannelSelection, PlaylistExplorerSort,
     };
     use shared::model::{VirtualId, XtreamCluster};
+
+    #[test]
+    fn episode_title_uses_last_code_to_preserve_series_name() {
+        assert_eq!(
+            parse_series_episode_title("Arquivo S01E01 - S02E03"),
+            Some(("Arquivo S01E01".to_string(), 2, 3))
+        );
+        assert_eq!(parse_series_episode_title("Série S01E04"), Some(("Série".to_string(), 1, 4)));
+    }
+
+    #[test]
+    fn repeated_season_name_is_collapsed_for_cross_season_grouping() {
+        assert_eq!(
+            parse_series_episode_title("Rick e Morty S01 Rick e Morty - S01E01 - Piloto"),
+            Some(("Rick e Morty".to_string(), 1, 1))
+        );
+        assert_eq!(
+            parse_series_episode_title("Rick e Morty S02 Rick e Morty - S02E01 - Rickmancing"),
+            Some(("Rick e Morty".to_string(), 2, 1))
+        );
+        assert_eq!(
+            parse_series_episode_title("Arquivo S01E01 - S02E03"),
+            Some(("Arquivo S01E01".to_string(), 2, 3))
+        );
+    }
 
     #[test]
     fn parse_optional_priority_input_treats_blank_as_none() {

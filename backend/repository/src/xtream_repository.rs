@@ -950,6 +950,25 @@ macro_rules! cluster_or_item_type {
     };
 }
 
+fn populate_embedded_series_episode(item: &mut XtreamPlaylistItem, episode_virtual_id: u32) {
+    let episode = item
+        .additional_properties
+        .as_ref()
+        .and_then(|properties| match properties {
+            StreamProperties::Series(series) => series.details.as_ref()?.episodes.as_ref()?.iter().find(|episode| {
+                episode.id == episode_virtual_id && !episode.direct_source.is_empty()
+            }),
+            _ => None,
+        })
+        .map(|episode| (Arc::clone(&episode.direct_source), Arc::clone(&episode.title)));
+
+    if let Some((url, title)) = episode {
+        item.url = url;
+        item.name = Arc::clone(&title);
+        item.title = title;
+    }
+}
+
 async fn xtream_get_item_for_stream_id_from_memory(
     virtual_id: u32,
     playlists: &PlaylistStorageState,
@@ -981,6 +1000,7 @@ async fn xtream_get_item_for_stream_id_from_memory(
                             Ok(item.clone())
                         } else if let Some(item) = xtream_storage.series.query(&mapping.parent_virtual_id.get()) {
                             let mut xc_item = item.clone();
+                            populate_embedded_series_episode(&mut xc_item, mapping.virtual_id.get());
                             xc_item.provider_id = mapping.provider_id;
                             xc_item.item_type = PlaylistItemType::Series;
                             xc_item.virtual_id = mapping.virtual_id;
@@ -1100,6 +1120,7 @@ pub async fn xtream_get_item_for_stream_id(
                     )
                     .await
                     {
+                        populate_embedded_series_episode(&mut item, mapping.virtual_id.get());
                         item.provider_id = mapping.provider_id;
                         item.item_type = PlaylistItemType::Series;
                         item.virtual_id = mapping.virtual_id;
