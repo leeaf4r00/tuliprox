@@ -382,6 +382,7 @@ struct BrowserPlayerProps {
     virtual_id: u32,
     cluster: XtreamCluster,
     source_url: String,
+    input_name: String,
     is_hls: bool,
     is_mpeg_ts: bool,
     is_live: bool,
@@ -887,7 +888,17 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
         })
     };
     let on_download_episode = {
-        let episode = props.episodes.get(*current_episode_index).cloned();
+        let episode = props.episodes.get(*current_episode_index).cloned().or_else(|| {
+            (!props.is_live && props.cluster == XtreamCluster::Video).then(|| BrowserPlayerEpisode {
+                virtual_id: props.virtual_id,
+                title: props.title.clone(),
+                label: props.title.clone(),
+                url: props.source_url.clone(),
+                input_name: props.input_name.clone(),
+                season: 0,
+                episode: 0,
+            })
+        });
         let playlist_request = props.playlist_request.clone();
         let services = services.clone();
         let translate = translate.clone();
@@ -908,14 +919,6 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
             let downloading_episode = downloading_episode.clone();
             spawn_local(async move {
                 let resolved_url = match playlist_request.as_ref() {
-                    Some(PlaylistRequest::Target(target_id)) => {
-                        let request = PlaylistUrlResolveRequest::Webplayer {
-                            target_id: *target_id,
-                            virtual_id: episode.virtual_id,
-                            cluster: XtreamCluster::Series,
-                        };
-                        services.playlist.resolve_url(request).await.unwrap_or_default()
-                    }
                     Some(request) => {
                         let source_url = if !episode.url.is_empty() {
                             episode.url.clone()
@@ -939,7 +942,7 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                     None => episode.url.clone(),
                 };
 
-                if resolved_url.is_empty() {
+                if resolved_url.is_empty() || resolved_url.starts_with(shared::utils::PROVIDER_SCHEME_PREFIX) {
                     services.toastr.error(translate.t("MESSAGES.DOWNLOAD.FAIL"));
                     downloading_episode.set(false);
                     return;
@@ -1089,20 +1092,20 @@ fn browser_player(props: &BrowserPlayerProps) -> Html {
                         translate.t("MESSAGES.PLAYBACK.MUTE")
                     }}</button>
                 </div>
-                {if props.can_download && !props.episodes.is_empty() {
+                {if props.can_download && (!props.episodes.is_empty() || props.cluster == XtreamCluster::Video) {
                     html! {
                         <button
                             type="button"
                             class="tp__browser-player__download-button"
                             disabled={*switching_episode || *downloading_episode}
                             onclick={on_download_episode}
-                            aria-label={translate.t("MESSAGES.PLAYBACK.DOWNLOAD_EPISODE")}
+                            aria-label={translate.t(if props.cluster == XtreamCluster::Video { "LABEL.DOWNLOAD" } else { "MESSAGES.PLAYBACK.DOWNLOAD_EPISODE" })}
                         >
                             <AppIcon name="Download" />
                             {if *downloading_episode {
                                 translate.t("MESSAGES.PLAYBACK.DOWNLOADING_EPISODE")
                             } else {
-                                translate.t("MESSAGES.PLAYBACK.DOWNLOAD_EPISODE")
+                                translate.t(if props.cluster == XtreamCluster::Video { "LABEL.DOWNLOAD" } else { "MESSAGES.PLAYBACK.DOWNLOAD_EPISODE" })
                             }}
                         </button>
                     }
@@ -1687,6 +1690,7 @@ pub fn PlaylistExplorer() -> Html {
                                         virtual_id={player_virtual_id}
                                         cluster={selected.cluster}
                                         source_url={current_source_url}
+                                        input_name={selected.input_name.clone()}
                                         is_hls={is_hls}
                                         is_mpeg_ts={is_mpeg_ts}
                                         is_live={selected.cluster == XtreamCluster::Live}
