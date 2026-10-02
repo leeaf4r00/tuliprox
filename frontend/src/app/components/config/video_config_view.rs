@@ -1,3 +1,4 @@
+use super::download_directory_field::DownloadDirectoryField;
 use crate::{
     app::{
         components::{
@@ -229,7 +230,10 @@ pub fn VideoConfigView() -> Html {
             <Card class="tp__config-view__card">
                 <h1>{translate.t(LABEL_DOWNLOAD)}</h1>
                 { edit_field_bool!(download_state, translate.t(LABEL_ORGANIZE_INTO_DIRECTORIES), organize_into_directories, VideoDownloadConfigFormAction::OrganizeIntoDirectories) }
-                { edit_field_text_option!(download_state, translate.t(LABEL_DIRECTORY), directory, VideoDownloadConfigFormAction::Directory) }
+                <DownloadDirectoryField
+                    value={download_state.form.directory.clone().unwrap_or_default()}
+                    on_change={{let state = download_state.clone(); Callback::from(move |value: String| state.dispatch(VideoDownloadConfigFormAction::Directory(Some(value))))}}
+                />
                 { edit_field_text_option!(download_state, translate.t(LABEL_EPISODE_PATTERN), episode_pattern, VideoDownloadConfigFormAction::EpisodePattern) }
                 <KeyValueEditor
                     label={Some(translate.t(LABEL_HEADERS))}

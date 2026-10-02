@@ -1,4 +1,5 @@
 {
+  "DIRECTORY_PICKER": {"SELECT":"اختر هذا المجلد","CANCEL":"إلغاء","ERROR":"تعذر فتح المجلد","UP":"المجلد الأب","HOME":"مجلدات الخادم","LOADING":"جار تحميل المجلدات"},
   "BACKOFF_JITTER_PERCENT_VALIDATION": "يجب أن يكون نطاق نسبة تباعد الارتداد بين 0 و95.",
   "COUNTRY": {
     "AD": "أندورا",

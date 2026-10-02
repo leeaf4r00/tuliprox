@@ -22,6 +22,8 @@ pub struct InputProps {
     #[prop_or_default]
     pub onkeydown: Option<Callback<KeyboardEvent>>,
     #[prop_or_default]
+    pub onclick: Option<Callback<MouseEvent>>,
+    #[prop_or_default]
     pub on_change: Option<Callback<String>>,
     #[prop_or_default]
     pub value: String,
@@ -93,6 +95,7 @@ pub fn Input(props: &InputProps) -> Html {
                 name={props.name.clone()}
                 autocomplete={if props.autocomplete { "on".to_string() } else { "off".to_string() }}
                 onkeydown={props.onkeydown.clone()}
+                onclick={props.onclick.clone()}
                 oninput={handle_oninput}
                 placeholder={props.placeholder.clone()}
                 aria-label={aria_label}

@@ -22,6 +22,7 @@ mod recording_config_cards;
 mod reverse_proxy_config_view;
 mod schedules_config_view;
 mod video_config_view;
+mod download_directory_field;
 mod webui_config_view;
 
 pub(crate) use admission_strategies::*;

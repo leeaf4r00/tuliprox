@@ -1,4 +1,5 @@
 {
+  "DIRECTORY_PICKER": {"SELECT":"Select this folder","CANCEL":"Cancel","ERROR":"Unable to open this folder.","UP":"Parent folder","HOME":"Open server folders","LOADING":"Loading folders…"},
   "BACKOFF_JITTER_PERCENT_VALIDATION": "Backoff jitter percent must be between 0 and 95.",
   "COUNTRY": {
     "AD": "Andorra",

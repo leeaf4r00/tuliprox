@@ -918,12 +918,35 @@ async fn save_config_plans(
     StatusCode::OK.into_response()
 }
 
+async fn browse_directories(axum::Json(path): axum::Json<String>) -> impl IntoResponse {
+    let requested = if path.trim().is_empty() { "/app" } else { path.trim() };
+    let Ok(current) = tokio::fs::canonicalize(requested).await else {
+        return (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "Directory unavailable"}))).into_response();
+    };
+    let Ok(mut entries) = tokio::fs::read_dir(&current).await else {
+        return (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "Directory unavailable"}))).into_response();
+    };
+    let mut directories = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.file_type().await.is_ok_and(|kind| kind.is_dir()) {
+            directories.push(entry.path().to_string_lossy().into_owned());
+        }
+    }
+    directories.sort();
+    axum::Json(json!({
+        "path": current.to_string_lossy(),
+        "parent": current.parent().map(|p| p.to_string_lossy()),
+        "directories": directories
+    })).into_response()
+}
+
 pub fn v1_api_config_register(router: Router<Arc<AppState>>) -> axum::Router<Arc<AppState>> {
     router
         .route("/config", axum::routing::get(config_unprotected))
         .route("/config/batchContent/{input_id}", axum::routing::get(config_batch_content))
         .route("/config/xtream/login-info", axum::routing::post(get_xtream_login_info))
         .route("/config/main", axum::routing::post(save_config_main))
+        .route("/config/directories", axum::routing::post(browse_directories))
         .route("/config/sources", axum::routing::post(save_config_sources))
         .route(
             "/config/apiproxy",
@@ -948,6 +971,7 @@ pub fn v1_api_config_register_with_permissions(app_state: &Arc<AppState>) -> Rou
         .layer(permission_layer!(app_state, Permission::SourceWrite));
 
     let config_write = Router::new()
+        .route("/config/directories", axum::routing::post(browse_directories))
         .route("/config/messaging/test", axum::routing::post(test_messaging))
         .route("/config/main", axum::routing::post(save_config_main))
         .route("/config/apiproxy", axum::routing::put(save_config_api_proxy_config))

@@ -1,4 +1,5 @@
 {
+  "DIRECTORY_PICKER": {"SELECT":"Selecionar esta pasta","CANCEL":"Cancelar","ERROR":"Não foi possível abrir esta pasta.","UP":"Pasta anterior","HOME":"Abrir pastas do servidor","LOADING":"Carregando pastas…"},
   "BACKOFF_JITTER_PERCENT_VALIDATION": "A porcentagem de jitter de backoff deve estar entre 0 e 95.",
   "COUNTRY": {
     "AD": "Andorra",
